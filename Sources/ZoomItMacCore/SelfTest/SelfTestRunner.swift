@@ -28,6 +28,7 @@ private final class FlippedBackgroundHostView: NSView {
 @MainActor
 public enum SelfTestRunner {
     public static func run() throws {
+        try RecordingSelfTests.run()
         try testAppInfoVersionResolution()
         try testViewportClampsZoom()
         try testViewportZoomAnimation()
