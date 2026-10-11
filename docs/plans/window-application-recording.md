@@ -310,3 +310,5 @@ There is no owner-deferred remainder.
 - I4 owns geometry-aware overlay/view/viewport APIs and the snapshot provider. I3 owns isolated source delivery and output timing. I5 observes/query state through ModeCoordinator/AppController and owns menu/hotkey dispatch.
 
 - Wave 1 completed: I1 (foundation agent) and I2 (ui_harness agent); standard and App Store `swift build` passed; XCTest `build-for-testing` passed; script/plist/project syntax checked. No runtime suites executed.
+
+- Wave 1 follow-up: final compatibility-test edit exposed an explicit-self closure compile error after the initial checkpoint. Corrected it and confirmed `build-for-testing` succeeds before advancing.

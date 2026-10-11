@@ -158,7 +158,7 @@ final class PickerCompatibilityTests: XCTestCase {
         try start(.window)
         let original = a.windows["Fixture A Primary"].frame.origin
         try RecordingTestEnvironment.click("fixture.nextDisplay", in: a)
-        try RecordingTestEnvironment.wait(description: "fixture moved across displays") { a.windows["Fixture A Primary"].frame.origin != original }
+        try RecordingTestEnvironment.wait(description: "fixture moved across displays") { self.a.windows["Fixture A Primary"].frame.origin != original }
         try RecordingTestEnvironment.click("probe.phase.idle", in: probe)
         try RecordingTestEnvironment.click("fixture.animation", in: a)
         try waitForMarker("primary", above: 0.2, phase: "idle")
