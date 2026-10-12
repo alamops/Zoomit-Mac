@@ -388,6 +388,7 @@ final class VideoClipEditorController: NSObject, NSWindowDelegate, VideoTimeline
         let symbol = muted ? "speaker.slash.fill" : (effectiveVolume < 0.5 ? "speaker.wave.1.fill" : "speaker.wave.2.fill")
         volumeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: muted ? "Unmute" : "Mute")
         volumeButton.toolTip = muted ? "Unmute" : "Mute"
+        volumeButton.setAccessibilityLabel(muted ? "Unmute recording preview" : "Mute recording preview")
         volumeButton.contentTintColor = muted ? .secondaryLabelColor : .labelColor
         volumeSlider?.isEnabled = !muted
     }

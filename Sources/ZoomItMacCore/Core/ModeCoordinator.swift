@@ -87,17 +87,28 @@ final class ModeCoordinator {
         configureRecordingCallbacks()
     }
 
-    func handle(_ command: AppCommand) {
-        switch recordingSessionState.phase {
+    /// Keep picker/editor/save transitions free of competing feature overlays,
+    /// while recording stop and exit commands retain their normal handling.
+    static func allowsCommand(_ command: AppCommand, during phase: RecordingSessionState.Phase) -> Bool {
+        switch phase {
         case .selecting, .starting, .stopping, .editing, .saving:
             switch command {
             case .activateStaticZoom, .activateLiveZoom, .activateDrawWithoutZoom,
-                 .snipRegion, .snipOcr, .startPanorama, .zoomIn, .zoomOutOrExit:
-                return
-            default: break
+                 .snipRegion, .snipOcr, .startPanorama, .zoomIn, .zoomOutOrExit,
+                 .toggleBreakTimer, .toggleDemoMirror:
+                return false
+            #if !ZOOMIT_APP_STORE
+            case .startDemoType, .resetDemoType:
+                return false
+            #endif
+            default: return true
             }
-        default: break
+        default: return true
         }
+    }
+
+    func handle(_ command: AppCommand) {
+        guard Self.allowsCommand(command, during: recordingSessionState.phase) else { return }
         if isSnipping {
             // Ignore activation and snip hotkeys while a region selection is on
             // screen so a second trigger can't stack overlays.

@@ -7,6 +7,7 @@ enum RecordingSelfTests {
     static func run() throws {
         try geometryAndMapping()
         try lifecycleAndGeneration()
+        try transitionCommandIsolation()
         try pickerWindowIDValidation()
         try pickerSelectionValidation()
         try sourcePolicyAndTimeline()
@@ -27,6 +28,32 @@ enum RecordingSelfTests {
         defer { window.close() }
         try expect(window.windowNumber == -1 && RecordingPickerController.validExcludedWindowIDs([window.windowNumber]).isEmpty,
                    "real unrealized AppKit windows reproduce the invalid window-ID case")
+    }
+
+    private static func transitionCommandIsolation() throws {
+        var activations: [AppCommand] = [.activateStaticZoom, .activateLiveZoom, .activateDrawWithoutZoom,
+            .snipRegion(save: false), .snipOcr, .startPanorama(save: true), .zoomIn, .zoomOutOrExit,
+            .toggleBreakTimer, .toggleDemoMirror(scope: .screen), .toggleDemoMirror(scope: .region),
+            .toggleDemoMirror(scope: .window)]
+        #if !ZOOMIT_APP_STORE
+        activations += [.startDemoType, .resetDemoType]
+        #endif
+        for phase: RecordingSessionState.Phase in [.selecting, .starting, .stopping, .editing, .saving] {
+            for command in activations {
+                try expect(!ModeCoordinator.allowsCommand(command, during: phase),
+                           "\(command) must not interfere with recording phase \(phase)")
+            }
+            for command: AppCommand in [.stopRecording, .toggleRecording(scope: .application), .exit] {
+                try expect(ModeCoordinator.allowsCommand(command, during: phase),
+                           "stop/cancellation handling must remain reachable during \(phase)")
+            }
+        }
+        for phase: RecordingSessionState.Phase in [.idle, .recording] {
+            for command in activations {
+                try expect(ModeCoordinator.allowsCommand(command, during: phase),
+                           "normal feature commands must remain available during \(phase)")
+            }
+        }
     }
 
     private static func pickerSelectionValidation() throws {

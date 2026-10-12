@@ -6,6 +6,7 @@ import XCTest
 struct RecordedVideo {
     struct Frame {
         let time: Double
+        let duration: Double
         let width: Int
         let height: Int
         let fractions: [String: Double]
@@ -36,7 +37,8 @@ struct RecordedVideo {
             guard width == Int(size.width), height == Int(size.height) else { throw HarnessError("MP4 frame changed canvas from \(size) to \(width)x\(height)") }
             // Privacy and lifecycle assertions must see every frame, including brief
             // leaks between otherwise clean samples. Only diagnostics are sampled.
-            let frame = Frame(time: time, width: width, height: height, fractions: try Self.measure(buffer))
+            let frame = Frame(time: time, duration: CMSampleBufferGetDuration(sample).seconds,
+                              width: width, height: height, fractions: try Self.measure(buffer))
             decoded.append(frame)
         }
         guard reader.status == .completed, !decoded.isEmpty else {
@@ -90,8 +92,18 @@ struct RecordedVideo {
     }
     func requireBlankTail(atLeast seconds: Double) throws {
         let tail = frames.filter { $0.time >= duration - seconds }
+        let intervals = zip(frames, frames.dropFirst()).map { $1.time - $0.time }
+            .filter { $0.isFinite && $0 > 0 }.sorted()
+        // A final Stop frame can be arbitrarily close to the preceding frame;
+        // use the typical encoded interval rather than that isolated short gap.
+        let cadence = intervals.isEmpty ? 0 : intervals[intervals.count / 2]
+        // Presentation timestamps mark frame starts. Include the final frame's
+        // encoded duration, with one cadence tick for boundary quantization.
+        let finalDuration = tail.last.map { $0.duration.isFinite && $0.duration > 0 ? $0.duration : cadence } ?? 0
+        let tailEnd = tail.last.map { $0.time + finalDuration } ?? 0
         guard tail.count >= 3,
-              tail.last!.time - tail.first!.time >= seconds - 0.25,
+              cadence > 0,
+              tailEnd - tail.first!.time >= seconds - cadence - 0.000001,
               tail.allSatisfy({ $0.fractions["black", default: 0] > 0.98 }) else {
             throw HarnessError("Blank target did not continue on advancing video timeline for \(seconds)s. \(summary)")
         }

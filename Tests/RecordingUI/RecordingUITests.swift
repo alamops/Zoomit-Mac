@@ -399,16 +399,34 @@ final class RecordingUITests: XCTestCase {
         try movie.exclude(["red"], tolerance: 0.0001)
     }
 
+    func testEditorMuteAccessibilityTracksAction() throws {
+        try start(.window)
+        try stop()
+        let mute = recorder.buttons["recording.editor.mute"]
+        XCTAssertTrue(mute.waitForExistence(timeout: 5))
+        XCTAssertEqual(mute.label, "Mute recording preview")
+        mute.click()
+        XCTAssertEqual(mute.label, "Unmute recording preview")
+        mute.click()
+        XCTAssertEqual(mute.label, "Mute recording preview")
+        try cancelEditor()
+    }
+
     func testEditorTrimExportTransportAndSavePanelCancelRecovery() throws {
         try start(.window)
         try hold(3)
-        let minimumUntrimmedDuration = elapsed
         try stop()
+        let timeline = RecordingTestEnvironment.element("recording.editor.timeline", in: recorder)
+        guard timeline.waitForExistence(timeout: 5), let value = timeline.value as? String,
+              let token = value.components(separatedBy: ", duration ").last?.split(separator: " ").first,
+              let untrimmedDuration = Double(token), untrimmedDuration.isFinite, untrimmedDuration > 0 else {
+            throw HarnessError("Editor did not expose its actual source duration: \(String(describing: timeline.value))")
+        }
         for button in ["recording.editor.skipEnd", "recording.editor.stepBack", "recording.editor.skipStart", "recording.editor.play", "recording.editor.play", "recording.editor.mute"] {
             try RecordingTestEnvironment.click(button, in: recorder)
         }
         let movie = try save("trimmed-window", trim: true)
-        XCTAssertLessThan(movie.duration, minimumUntrimmedDuration, "Trimmed export must be shorter than full source clip")
+        XCTAssertLessThan(movie.duration, untrimmedDuration, "Trimmed export must be shorter than full source clip")
         try movie.requireMarker("primary", above: 0.25)
         try movie.exclude(["forbidden", "second"])
         try start(.window)

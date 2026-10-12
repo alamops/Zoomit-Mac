@@ -36,7 +36,39 @@ final class VideoAssertionsTests: XCTestCase {
         XCTAssertThrowsError(try video.requireBlankTail(atLeast: 0.5))
     }
 
-    private func writeMovie(to url: URL, forbiddenFrame: Int?) async throws {
+    func testBlankTailDurationAllowsOnlyOneEncodedFrameOfTolerance() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for fps: Int32 in [30, 60] {
+            let requiredFrames = Int(fps) * 3 / 2
+            for missing in [0, 1, 2, 6] {
+                let url = directory.appendingPathComponent("tail-\(fps)-missing-\(missing).mp4")
+                try await writeMovie(to: url, forbiddenFrame: nil, frameCount: requiredFrames - missing, fps: fps)
+                let video = try RecordedVideo(url: url)
+                XCTAssertEqual(video.frames.count, requiredFrames - missing)
+                if missing <= 1 {
+                    XCTAssertNoThrow(try video.requireBlankTail(atLeast: 1.5), "One encoded frame of boundary quantization is allowed at \(fps) fps")
+                } else {
+                    XCTAssertThrowsError(try video.requireBlankTail(atLeast: 1.5), "A blank tail missing \(missing) frames must fail at \(fps) fps")
+                }
+            }
+        }
+    }
+
+    func testBlankTailCadenceIgnoresCloselySpacedFinalStopFrame() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await writeMovie(to: url, forbiddenFrame: nil, frameCount: 45,
+                             finalFrameOffset: CMTime(value: 1, timescale: 600))
+        let video = try RecordedVideo(url: url)
+        XCTAssertEqual(video.frames.count, 46)
+        XCTAssertNoThrow(try video.requireBlankTail(atLeast: 1.5),
+                         "An extra Stop frame 1/600 second after a normal frame must not redefine the 30 fps cadence")
+    }
+
+    private func writeMovie(to url: URL, forbiddenFrame: Int?, frameCount: Int = 30, fps: Int32 = 30,
+                            finalFrameOffset: CMTime? = nil) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
@@ -57,7 +89,8 @@ final class VideoAssertionsTests: XCTestCase {
         writer.add(input)
         guard writer.startWriting() else { throw writer.error ?? HarnessError("Test writer failed to start") }
         writer.startSession(atSourceTime: .zero)
-        for index in 0..<30 {
+        let finalTime = finalFrameOffset.map { CMTimeAdd(CMTime(value: Int64(frameCount - 1), timescale: fps), $0) }
+        for index in 0..<(frameCount + (finalTime == nil ? 0 : 1)) {
             let deadline = Date().addingTimeInterval(5)
             while !input.isReadyForMoreMediaData {
                 guard writer.status == .writing, Date() < deadline else {
@@ -85,11 +118,14 @@ final class VideoAssertionsTests: XCTestCase {
                 }
             }
             CVPixelBufferUnlockBaseAddress(buffer, [])
-            guard adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(index), timescale: 30)) else {
+            let time = index == frameCount ? finalTime! : CMTime(value: Int64(index), timescale: fps)
+            guard adaptor.append(buffer, withPresentationTime: time) else {
                 throw writer.error ?? HarnessError("Test frame append failed")
             }
         }
-        writer.endSession(atSourceTime: CMTime(value: 30, timescale: 30))
+        let end = finalTime.map { CMTimeAdd($0, CMTime(value: 1, timescale: fps)) }
+            ?? CMTime(value: Int64(frameCount), timescale: fps)
+        writer.endSession(atSourceTime: end)
         input.markAsFinished()
         await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? HarnessError("Test movie did not finalize") }
