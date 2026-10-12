@@ -830,29 +830,32 @@ final class ZoomCanvasView: NSView {
         }
     }
 
-    /// Live zoom is interactive (click-through, real cursor visible) whenever it
-    /// is not in drawing mode, letting the user keep using the system while the
-    /// magnified view follows the cursor. Drawing mode (and every other mode)
-    /// captures input modally as usual.
+    /// Display live zoom can pass clicks through because its coordinates remain
+    /// anchored to the desktop. Isolated content is fitted into a different
+    /// presentation rectangle, so it always captures input modally. Its live
+    /// imagery, mouse panning and keyboard zoom controls remain available.
     private var isInteractiveLiveZoom: Bool {
-        interactionMode == .liveZoom && !isDrawingMode && !isSelectingRegion
+        contentGeometry == nil && interactionMode == .liveZoom && !isDrawingMode && !isSelectingRegion
     }
 
     private func updateLiveZoomInteractivity() {
         guard let window else { return }
         let interactive = isInteractiveLiveZoom
+        window.ignoresMouseEvents = interactive
+        // A region snip temporarily shows the cursor even in a modal canvas.
+        // Restore its normal visibility when the snip ends without relying on
+        // a click-through transition (isolated live mode never has one).
+        if !interactive && !isSelectingRegion { hideSystemCursor() }
         guard interactive != liveZoomClickThrough else { return }
         liveZoomClickThrough = interactive
         if interactive {
             // Pass mouse events through to the apps underneath and show the real
             // cursor; a global monitor keeps the magnified view tracking it.
-            window.ignoresMouseEvents = true
             showSystemCursor()
             startLiveMouseTracking()
         } else {
             // Reclaim input so the overlay can draw/pan modally.
             stopLiveMouseTracking()
-            window.ignoresMouseEvents = false
             hideSystemCursor()
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)

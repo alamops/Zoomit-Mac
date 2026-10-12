@@ -5,6 +5,7 @@ import AppKit
 enum RecordingOverlaySelfTests {
     static func run() throws {
         try nativeFootprintAndClipping()
+        try isolatedLiveInputIsModal()
         let geometry = try RecordingCanvasGeometry(logicalSize: CGSize(width: 64, height: 32), pixelScale: 2,
                                                    hostDisplayFrame: CGRect(x: -1000, y: 200, width: 600, height: 600))
         let green = try RecordingSelfTests.pixelImage(width: 128, height: 64) { _, _ in (0, 255, 0) }
@@ -85,10 +86,44 @@ enum RecordingOverlaySelfTests {
                                                    hostDisplayFrame: CGRect(x: 0, y: 0, width: 128, height: 128))
         let metadata: [SCStreamFrameInfo: Any] = [
             .contentRect: CGRect(x: 16, y: 0, width: 32, height: 64).dictionaryRepresentation,
-            .contentScale: CGFloat(0.5), .scaleFactor: CGFloat(4)
+            .contentScale: CGFloat(0.5), .scaleFactor: CGFloat(2)
         ]
         let pixels = RecordingSourceSession.pixelContentRect(attachments: metadata, pixelSize: CGSize(width: 128, height: 128))
-        try require(pixels == CGRect(x: 32, y: 0, width: 64, height: 128), "native scale metadata maps content into buffer pixels")
+        try require(pixels == CGRect(x: 32, y: 0, width: 64, height: 128), "downscaled native content is converted from surface points to pixels once")
+        for contentScale: CGFloat in [0.25, 1, 2] {
+            var changedScale = metadata
+            changedScale[.contentScale] = contentScale
+            try require(RecordingSourceSession.pixelContentRect(attachments: changedScale, pixelSize: CGSize(width: 128, height: 128)) == pixels,
+                        "original-content scaling does not change an already-scaled surface footprint")
+        }
+        let upscaled: [SCStreamFrameInfo: Any] = [
+            .contentRect: NSValue(rect: CGRect(x: 0, y: 16, width: 64, height: 32)),
+            .contentScale: CGFloat(2), .scaleFactor: CGFloat(2)
+        ]
+        try require(RecordingSourceSession.pixelContentRect(attachments: upscaled, pixelSize: CGSize(width: 128, height: 128)) == CGRect(x: 0, y: 32, width: 128, height: 64),
+                    "upscaled resized content retains its native surface padding")
+        let mixedScale: [SCStreamFrameInfo: Any] = [
+            .contentRect: CGRect(x: -2, y: 3, width: 10, height: 12),
+            .contentScale: CGFloat(0.5), .scaleFactor: CGFloat(3)
+        ]
+        try require(RecordingSourceSession.pixelContentRect(attachments: mixedScale, pixelSize: CGSize(width: 24, height: 36)) == CGRect(x: 0, y: 9, width: 24, height: 27),
+                    "mixed display and content scales clip the scaled footprint to buffer bounds")
+        for invalidScale: Any in [CGFloat.zero, CGFloat(-1), CGFloat.nan, CGFloat.infinity, "invalid"] {
+            var invalid = metadata
+            invalid[.scaleFactor] = invalidScale
+            try require(RecordingSourceSession.pixelContentRect(attachments: invalid, pixelSize: CGSize(width: 128, height: 128)) == nil,
+                        "invalid point-to-pixel scale cannot publish a target footprint")
+        }
+        for invalidRect in [CGRect.zero, CGRect(x: CGFloat.nan, y: 0, width: 16, height: 16),
+                            CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 16),
+                            CGRect(x: 1000, y: 1000, width: 16, height: 16)] {
+            var invalid = metadata
+            invalid[.contentRect] = invalidRect
+            try require(RecordingSourceSession.pixelContentRect(attachments: invalid, pixelSize: CGSize(width: 128, height: 128)) == nil,
+                        "invalid or out-of-surface content does not preserve target pixels")
+        }
+        try require(RecordingSourceSession.pixelContentRect(attachments: metadata, pixelSize: CGSize(width: CGFloat.nan, height: 128)) == nil,
+                    "invalid buffer dimensions cannot publish a target footprint")
         let black = try RecordingSelfTests.pixelImage(width: 128, height: 128) { _, _ in (0, 0, 0) }
         let slot = RecordingSourceSession(generation: 1, audioSink: { _ in })
         slot.consume(.complete, image: black, contentRect: pixels)
@@ -119,6 +154,62 @@ enum RecordingOverlaySelfTests {
                     "empty native content cannot keep a frozen target alive")
         try require(RecordingFrameRenderer.logicalContentRect(source: frame, geometry: geometry, generation: 2) == nil,
                     "old-session footprint cannot affect a new target")
+    }
+
+    private static func isolatedLiveInputIsModal() throws {
+        let geometry = try RecordingCanvasGeometry(logicalSize: CGSize(width: 64, height: 32), pixelScale: 2,
+                                                   hostDisplayFrame: CGRect(x: 0, y: 0, width: 256, height: 128))
+        let green = try RecordingSelfTests.pixelImage(width: 128, height: 64) { _, _ in (0, 255, 0) }
+        let frame = CapturedFrame(image: green, display: DisplayDescriptor(id: 1, frame: geometry.hostDisplayFrame, scaleFactor: 2),
+                                  pixelSize: CGSize(width: 128, height: 64), timestamp: Date())
+        let preferences = UserDefaults(suiteName: "RecordingModalInputSelfTests.\(UUID().uuidString)")!
+        let access = UserDefaultsUserSelectedResourceAccess(defaults: preferences)
+        for isolated in [true, false] {
+            let viewport = ZoomViewportController()
+            viewport.configure(for: frame, initialZoom: 2, contentGeometry: isolated ? geometry : nil)
+            let annotations = AnnotationController()
+            var commands: [AppCommand] = []
+            let canvas = ZoomCanvasView(frame: geometry.presentationBounds, capturedFrame: frame,
+                viewportController: viewport, annotationController: annotations, smoothImage: false,
+                contentGeometry: isolated ? geometry : nil, generation: 1, activeContentRect: geometry.logicalBounds,
+                userSelectedResourceAccess: access, commandSink: { commands.append($0) })
+            let window = NSWindow(contentRect: geometry.hostDisplayFrame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = canvas
+            defer {
+                canvas.prepareForClose()
+                window.orderOut(nil)
+                window.close()
+            }
+            window.makeFirstResponder(canvas)
+            canvas.interactionMode = .liveZoom
+            try require(window.ignoresMouseEvents == !isolated,
+                        "only ordinary display live zoom allows desktop click-through")
+            guard isolated else { continue }
+            try require(window.firstResponder === canvas, "isolated live canvas retains keyboard controls")
+            guard let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: 126),
+                  let click = NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 128, y: 64),
+                    modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 1, clickCount: 1, pressure: 1) else {
+                throw SelfTestError.failure("Could not construct modal live input events")
+            }
+            canvas.keyDown(with: key)
+            try require(commands == [.zoomIn], "isolated live zoom keeps keyboard magnification controls")
+            canvas.mouseDown(with: click)
+            try require(annotations.inProgressSnapshot == nil && annotations.annotationSnapshot.isEmpty,
+                        "isolated live clicks are consumed without implicitly starting a stroke")
+            canvas.toggleDrawingMode()
+            canvas.mouseDown(with: click)
+            try require(!window.ignoresMouseEvents && annotations.inProgressSnapshot != nil,
+                        "explicit drawing still receives target-relative input in isolated live zoom")
+            canvas.interactionMode = .typing
+            try require(!window.ignoresMouseEvents, "isolated typing never releases input to desktop apps")
+            canvas.interactionMode = .liveZoom
+            try require(!window.ignoresMouseEvents && snapshot(canvas).frozenImage == nil,
+                        "returning to live retains modal input and an updating source")
+        }
     }
 
     private static func snapshot(_ canvas: ZoomCanvasView) throws -> RecordingOverlaySnapshot {

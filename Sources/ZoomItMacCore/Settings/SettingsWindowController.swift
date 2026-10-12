@@ -1308,7 +1308,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             """
             Record a screen or region, or use the system picker to record one window or one application on a display. Any recording shortcut stops an active recording; Stop Recording is also available in the menu.
 
-            Window/application recordings render zoom, drawing, typing and optional webcam directly onto isolated content. Video size stays fixed. If the target hides, closes or quits, black target content continues until you stop; enabled webcam and microphone continue.
+            Window/application recordings render zoom, drawing, typing and optional webcam directly onto isolated content. The live canvas captures mouse input; press Escape to interact directly with the app while recording continues. Video size stays fixed. If the target hides, closes or quits, black target content continues until you stop; enabled webcam and microphone continue.
 
             System audio in window/application mode includes only the selected app, including sound from its other windows (for example another browser window). Optional microphone recording requires microphone permission.
             """,

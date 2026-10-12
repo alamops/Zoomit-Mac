@@ -29,7 +29,12 @@ final class PickerCompatibilityTests: XCTestCase {
         }
         a.activate()
         try RecordingTestEnvironment.click(scope == .window ? "probe.window" : "probe.application", in: probe)
-        try driver.select(scope: scope, targetApp: a, windowTitle: "Fixture A Primary")
+        try driver.select(scope: scope, targetApp: a, windowTitle: "Fixture A Primary") {
+            guard let evidence = try? self.environment.evidence(),
+                  let filter = evidence["filter"] as? [String: Any],
+                  filter["mode"] as? String == (scope == .window ? "window" : "application") else { return false }
+            return ["starting", "capturing"].contains(evidence["status"] as? String ?? "")
+        }
         try RecordingTestEnvironment.wait(timeout: 15, description: "authorized native stream startup; inspect probe-evidence.json for permission failure") {
             (try? self.environment.evidence()["status"] as? String) == "capturing"
         }

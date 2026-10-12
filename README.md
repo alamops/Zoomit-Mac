@@ -113,6 +113,8 @@ Choose **Record Screen**, **Record Region…**, **Record Window…**, or **Recor
 
 Window/application recordings render static zoom, live zoom, drawing, and typing directly onto the selected content. The interactive zoom/draw canvas shows that content fitted to the presentation display. Existing screen annotations are cleared before target selection. Webcam picture-in-picture stays fixed in the recorded viewport as the content zooms. Screen/region recordings retain their screen-overlay capture behavior.
 
+The isolated live canvas shows updating content and captures mouse input. Press Escape to dismiss it and interact directly with the selected app while recording continues.
+
 Video dimensions stay fixed for each clip. A resized window is fitted into the original canvas with black padding, and window capture follows the selected window across displays. Application capture stays on its selected display. If the target is hidden, minimized, closed, or quits, recording continues with black target content until you stop it; enabled webcam and microphone continue. Hidden content can return through the same capture selection. A closed window or quit application is not automatically replaced by a new window or relaunched app.
 
 With audio enabled, window/application recording captures the selected app's audio. Audio is scoped to the application, so a recording of one browser window can include sound from that browser's other windows. Microphone audio remains optional. Screen/region recordings use system audio.

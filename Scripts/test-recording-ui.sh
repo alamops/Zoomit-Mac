@@ -110,7 +110,7 @@ esac
 if ! xcodebuild test \
     -project "$UI_ROOT/Tests/RecordingUI/RecordingUI.xcodeproj" \
     -scheme "$UI_SCHEME" -destination 'platform=macOS' \
-    -parallel-testing-enabled NO -maximum-concurrent-test-macos-destinations 1 \
+    -parallel-testing-enabled NO \
     -derivedDataPath "$UI_DERIVED" \
     -resultBundlePath "$UI_RUN_DIR/RecordingUI.xcresult" \
     "ZOOMIT_UI_APP_PATH=$UI_APP_PATH" \

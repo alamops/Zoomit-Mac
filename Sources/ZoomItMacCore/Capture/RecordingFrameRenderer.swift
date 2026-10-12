@@ -135,7 +135,7 @@ enum RecordingFrameRenderer {
     private static func makeContext(geometry: RecordingCanvasGeometry) -> CGContext? {
         guard let context = CGContext(data: nil, width: geometry.outputWidth, height: geometry.outputHeight,
                                       bitsPerComponent: 8, bytesPerRow: geometry.outputWidth * 4,
-                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+                                      space: RecordingColorSpace.rgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.translateBy(x: 0, y: CGFloat(geometry.outputHeight))
         context.scaleBy(x: CGFloat(geometry.outputWidth) / geometry.logicalSize.width,
                         y: -CGFloat(geometry.outputHeight) / geometry.logicalSize.height)

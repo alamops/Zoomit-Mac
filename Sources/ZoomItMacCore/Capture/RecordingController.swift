@@ -58,11 +58,15 @@ final class RecordingEngine: @unchecked Sendable {
         self.height = height
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
 
-        videoSettings = [
+        var settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height
         ]
+        if !permitsFallback {
+            settings[AVVideoColorPropertiesKey] = RecordingColorSpace.videoProperties
+        }
+        videoSettings = settings
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = true
         if writer.canAdd(videoInput) { writer.add(videoInput) }
@@ -501,12 +505,13 @@ final class RecordingEngine: @unchecked Sendable {
             height: height,
             bitsPerComponent: 8,
             bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
+            space: RecordingColorSpace.rgb,
             bitmapInfo: bitmapInfo
         ) else { return nil }
 
         context.interpolationQuality = .high
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        RecordingColorSpace.tag(pixelBuffer)
 
         var description: CMVideoFormatDescription?
         guard CMVideoFormatDescriptionCreateForImageBuffer(
@@ -786,9 +791,9 @@ final class RecordingController {
     private var isStoppingRecording = false
     private var isFinalizingRecording = false
     private var onStateChange: ((Bool) -> Void)?
-    /// Called right before the Save dialog is shown so any obscuring overlay
-    /// (e.g. a zoom overlay at `.screenSaver` level) can be dismissed first.
-    var onWillShowSaveDialog: (() -> Void)?
+    /// Dismisses any obscuring overlay before recording results are presented,
+    /// including error alerts as well as the editor and save dialog.
+    var onWillPresentRecordingResult: (() -> Void)?
 
     private var stream: SCStream?
     private var streamOutput: RecordingStreamOutput?
@@ -1372,6 +1377,7 @@ final class RecordingController {
             engine.finish { url in
                 Task { @MainActor in
                     guard self.sessionState.generation == generation, self.sessionState.phase == .stopping else { return }
+                    if url == nil { await engine.cancel() }
                     self.engine = nil
                     self.isRecording = false
                     self.isStoppingRecording = false
@@ -1417,7 +1423,7 @@ final class RecordingController {
 
     private func presentSave(tempURL: URL) {
         // Dismiss any zoom overlay first so the editor isn't hidden behind it.
-        onWillShowSaveDialog?()
+        onWillPresentRecordingResult?()
         DispatchQueue.main.async { [weak self] in
             self?.presentClipEditor(tempURL: tempURL)
         }
@@ -1616,6 +1622,7 @@ final class RecordingController {
     }
 
     private func presentError(_ error: Error) {
+        onWillPresentRecordingResult?()
         let alert = NSAlert(error: error)
         alert.runModal()
     }

@@ -109,6 +109,16 @@ enum RecordingIntegrationSelfTests {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw SelfTestError.failure("Writer produced no video track") }
         let size = try await track.load(.naturalSize)
         guard size == CGSize(width: 64, height: 48) else { throw SelfTestError.failure("Writer changed fixed dimensions: \(size)") }
+        guard let description = try await track.load(.formatDescriptions).first else {
+            throw SelfTestError.failure("Written MP4 lacks a video format description")
+        }
+        for (key, expected) in [(kCMFormatDescriptionExtension_ColorPrimaries, AVVideoColorPrimaries_ITU_R_709_2),
+                                (kCMFormatDescriptionExtension_TransferFunction, AVVideoTransferFunction_ITU_R_709_2),
+                                (kCMFormatDescriptionExtension_YCbCrMatrix, AVVideoYCbCrMatrix_ITU_R_709_2)] {
+            guard CMFormatDescriptionGetExtension(description, extensionKey: key) as? String == expected else {
+                throw SelfTestError.failure("Written MP4 has missing or inconsistent color metadata: \(key)")
+            }
+        }
         let audio = try await asset.loadTracks(withMediaType: .audio)
         guard audio.isEmpty else { throw SelfTestError.failure("Disabled system/mic audio unexpectedly produced a track") }
         let generator = AVAssetImageGenerator(asset: asset)

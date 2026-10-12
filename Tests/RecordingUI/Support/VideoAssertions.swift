@@ -29,18 +29,17 @@ struct RecordedVideo {
         reader.add(output)
         guard reader.startReading() else { throw HarnessError("Video reader startup failed: \(String(describing: reader.error))") }
         var decoded: [Frame] = []
-        var lastMeasuredTime = -Double.infinity
-        var last: Frame?
         while let sample = output.copyNextSampleBuffer() {
             guard let buffer = sample.imageBuffer else { throw HarnessError("Decoded video sample has no image") }
             let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
             let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
             guard width == Int(size.width), height == Int(size.height) else { throw HarnessError("MP4 frame changed canvas from \(size) to \(width)x\(height)") }
-            guard time - lastMeasuredTime >= 0.15 || time > duration - 0.2 else { continue }
+            // Privacy and lifecycle assertions must see every frame, including brief
+            // leaks between otherwise clean samples. Only diagnostics are sampled.
             let frame = Frame(time: time, width: width, height: height, fractions: try Self.measure(buffer))
-            decoded.append(frame); last = frame; lastMeasuredTime = time
+            decoded.append(frame)
         }
-        guard reader.status == .completed, !decoded.isEmpty, last != nil else {
+        guard reader.status == .completed, !decoded.isEmpty else {
             throw HarnessError("MP4 decoding incomplete: status \(reader.status.rawValue), error \(String(describing: reader.error))")
         }
         frames = decoded
@@ -103,7 +102,13 @@ struct RecordedVideo {
         }
     }
     var summary: String {
-        "\(Int(size.width))x\(Int(size.height)), duration=\(duration), sampledFrames=\(frames.map { ["time": $0.time, "markers": $0.fractions] as [String: Any] })"
+        // Keep attachments readable without weakening the all-frame checks above.
+        let limit = 24
+        let indices = frames.count <= limit ? Array(frames.indices) : (0..<limit).map {
+            $0 * (frames.count - 1) / (limit - 1)
+        }
+        let samples = indices.map { ["time": frames[$0].time, "markers": frames[$0].fractions] as [String: Any] }
+        return "\(Int(size.width))x\(Int(size.height)), duration=\(duration), decodedFrames=\(frames.count), diagnosticSamples=\(samples)"
     }
     func attach(to test: XCTestCase) {
         let report = XCTAttachment(string: summary)

@@ -147,8 +147,9 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
 
     func stream(_ stream: SCStream, didStopWithError error: Error) { end(error: error) }
 
-    /// Frame metadata expresses the content rectangle and its scale separately.
-    /// Convert to buffer pixels before mapping into the fixed logical canvas.
+    /// contentRect is the already-scaled content footprint in surface points.
+    /// scaleFactor converts surface points to pixels; contentScale describes the
+    /// earlier original-content-to-surface resize and must not be applied again.
     static func pixelContentRect(attachments: [SCStreamFrameInfo: Any], pixelSize: CGSize) -> CGRect? {
         let rect: CGRect?
         if let value = attachments[.contentRect] as? CGRect { rect = value }
@@ -158,11 +159,11 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
         } else { rect = nil }
         guard let rect, rect.minX.isFinite, rect.minY.isFinite,
               rect.width.isFinite, rect.height.isFinite, !rect.isEmpty, !rect.isNull else { return nil }
-        func scale(_ key: SCStreamFrameInfo) -> CGFloat {
-            if let number = attachments[key] as? NSNumber { return CGFloat(number.doubleValue) }
-            return attachments[key] as? CGFloat ?? 1
-        }
-        let factor = scale(.contentScale) * scale(.scaleFactor)
+        let factor: CGFloat
+        if let value = attachments[.scaleFactor] {
+            guard let number = value as? NSNumber else { return nil }
+            factor = CGFloat(number.doubleValue)
+        } else { factor = 1 }
         guard factor.isFinite, factor > 0, pixelSize.width.isFinite, pixelSize.height.isFinite,
               pixelSize.width > 0, pixelSize.height > 0 else { return nil }
         let pixels = rect.applying(CGAffineTransform(scaleX: factor, y: factor))

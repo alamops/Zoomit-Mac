@@ -514,7 +514,7 @@ final class ModeCoordinator {
         recordingController.onSessionStateChanged = { [weak self] state in
             self?.onRecordingSessionStateChanged?(state)
         }
-        recordingController.onWillShowSaveDialog = { [weak self] in
+        recordingController.onWillPresentRecordingResult = { [weak self] in
             self?.overlayController.prepareForPresentedWindow()
             self?.exitActiveMode()
         }

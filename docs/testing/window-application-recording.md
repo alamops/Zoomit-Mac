@@ -6,7 +6,9 @@ This feature adds native target selection, isolated zoom/drawing/webcam composit
 
 The execute-plan run implements application code, deterministic self-tests, native XCTest UI tests, fixtures, and assertion helpers. Compile checks are separate from executing the tests. Standard and App Store app builds and both XCTest schemes’ build-for-testing checks passed. The development app bundle was built and its signature verified. Checkpoint details are recorded in the plan execution log.
 
-**Runtime suites have not been executed by this coding run.** Native picker accessibility, picker-only authorization, source status delivery on macOS 14, two-display behavior, device permissions, and exported-video/audio assertions remain runtime acceptance gates. A compiled test is not evidence that its scenario passed.
+The original execute-plan coding run did not execute runtime suites. During the subsequent review-fix run on 2026-10-12, both standard and App Store self-test suites passed, and both independent `VideoAssertionsTests` passed against real MP4s. Those two tests also failed against the old frame-sampling implementation, proving the regression checks detect single-frame leaks and blank-tail interruptions.
+
+Both native schemes passed build-for-testing. Native preflight launched the dedicated recorder and fixtures and passed `HarnessSmokeTests.testPreflight`. The picker cancellation/retry test obtained an authorized window filter and received source frames, but failed its required primary-color marker assertion. Full native recording acceptance remains pending; no assertion was relaxed. The retained failing run is `.build/recording-ui/run-20261012-021202-OvEQHO/RecordingUI.xcresult`, with `probe-evidence.json` beside it. Reproduce with `zsh Scripts/test-recording-ui.sh --preflight`, inspect the captured source and probe color measurement, then rerun the full distribution commands below. macOS 14, two-display behavior, device permissions, and complete recording/export flows still require passing evidence.
 
 ## Test layers
 
@@ -80,11 +82,11 @@ Fixture A provides a green primary window, a cyan second window, an orange dialo
 
 The probe records native status/filter/pixel evidence to `probe-evidence.json` and snapshots to `probe-latest.png`. Newer filter identity metadata is inspected only behind its availability check. On macOS 14 the authorized filter remains opaque; the capture result and native status sequence must establish behavior without guessing an identity from a title or rectangle.
 
-Each probe frame also retains native contentRect/contentScale/scaleFactor and buffer dimensions. Those values identify the changing target footprint inside a fixed-size surface, so input and annotations can exclude letterbox padding after resize. The conversion and clipping have deterministic regression coverage; their OS-specific alignment is also part of native resize acceptance. Apple's [capture sample](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos) describes obtaining this per-frame metadata.
+Each probe frame also retains native contentRect/contentScale/scaleFactor and buffer dimensions. The content rectangle already describes scaled surface points: multiply by scaleFactor to obtain pixels, without applying contentScale again. These values identify the changing target footprint inside a fixed-size surface, so input and annotations can exclude letterbox padding after resize. The conversion and clipping have deterministic regression coverage; their OS-specific alignment is also part of native resize acceptance. Apple's [capture sample](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos) describes obtaining this per-frame metadata.
 
 Recording assertions read exported MP4s and check:
 
-- First, middle, final, and lifecycle-transition frames, including the black tail after target loss.
+- Every decoded frame, including first/final frames and brief lifecycle transitions. Diagnostic attachments summarize at most 24 frames; privacy and lifecycle assertions use the full sequence.
 - Required/forbidden fixture markers using tolerant color thresholds after H.264 compression.
 - Constant video dimensions, correct aspect ratio/padding, and clip duration that includes unavailable-source time.
 - Visible zoom, drawn annotations/typing/highlights, and fixed webcam placement through deterministic composition checks.
@@ -105,6 +107,7 @@ Run required flows on both macOS 14 and the current supported macOS, and for bot
 | Existing screen overlay before selection | Old display pixels/annotations are discarded before target capture | Native UI + exported frames |
 | Static zoom/draw | Frozen isolated target, correct transformed annotations; source loss overrides the freeze | Native UI + composition tests |
 | Live zoom/typing | New target frames remain live under correct viewport and annotation transforms | Native UI + composition tests |
+| Isolated live input | Fitted presentation captures clicks; keyboard zoom, panning, drawing and typing work; Escape returns interaction to the app while recording continues | Real-window self-tests + native UI |
 | Pen/highlights/shapes/text/undo/erase | Recorded result matches target-local interaction, including in-progress work | Native UI + rendering tests |
 | Resize window | Original MP4 dimensions remain constant; source fits with black padding | Native UI + geometry/video assertions |
 | Move window across displays | Same selected window follows; output dimensions remain fixed | Two-display native test |
@@ -118,6 +121,7 @@ Run required flows on both macOS 14 and the current supported macOS, and for bot
 | Trim/export/save | Edited MP4 saved through actual editor/save UI; readable expected output | Native UI + output assertions |
 | Editor/save cancellation | Resources/temp files cleaned; next recording remains usable | Native UI + lifecycle tests |
 | No first source frame | Fixed-size black clip can finalize; no desktop fallback | Writer integration + native lifecycle checks |
+| Writer failure with overlay visible | Overlay is dismissed before the error alert, partial output is removed, and the next recording is usable | Manual fault-injection acceptance |
 | Persisted/custom hotkeys | Existing actions retain precedence; conflicting new shortcut is explained and its menu works | Effective-binding tests + Settings UI |
 | Screen/region regressions | Existing recording/overlay/editor flow still works | Existing self-tests + native regression tests |
 | Five-minute 4K capture | No accumulating pending-frame backlog or unbounded memory growth; audio/video timeline remains continuous | Manual performance check with Instruments/Activity Monitor |

@@ -44,7 +44,10 @@ final class RecordingUITests: XCTestCase {
             try RecordingTestEnvironment.menuAction(scope == .window ? "recording.recordWindow" : "recording.recordApplication", in: recorder)
         }
         try state(containing: "Choose a recording target")
-        try picker.select(scope: scope, targetApp: a, windowTitle: "Fixture A Primary")
+        try picker.select(scope: scope, targetApp: a, windowTitle: "Fixture A Primary") {
+            let status = RecordingTestEnvironment.status(in: self.recorder)
+            return status.contains("Starting recording") || status.contains(scope == .window ? "Recording Window" : "Recording Application")
+        }
         try state(containing: scope == .window ? "Recording Window" : "Recording Application")
         startedAt = Date()
         try hold(0.8)
@@ -327,7 +330,10 @@ final class RecordingUITests: XCTestCase {
         // Use the derived shortcut while the old screen overlay is active.
         recorder.typeKey("5", modifierFlags: [.control, .option])
         try state(containing: "Choose a recording target")
-        try picker.select(scope: .window, targetApp: a, windowTitle: "Fixture A Primary")
+        try picker.select(scope: .window, targetApp: a, windowTitle: "Fixture A Primary") {
+            let status = RecordingTestEnvironment.status(in: self.recorder)
+            return status.contains("Starting recording") || status.contains("Recording Window")
+        }
         try state(containing: "Recording Window")
         try hold(2)
         try stop()

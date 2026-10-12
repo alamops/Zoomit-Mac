@@ -16,7 +16,7 @@ final class NativePickerDriver {
     func include(_ app: XCUIApplication) { requestingApps.append(app) }
 
     func select(scope: Scope, targetApp: XCUIApplication, windowTitle: String,
-                applicationName: String = "Recording Fixture A") throws {
+                applicationName: String = "Recording Fixture A", selectionAccepted: @escaping () -> Bool) throws {
         include(targetApp)
         let target = targetApp.windows[windowTitle]
         guard target.waitForExistence(timeout: 8) else { throw HarnessError("Missing fixture target \(windowTitle)") }
@@ -31,8 +31,12 @@ final class NativePickerDriver {
             : ["Share This Application", "Share This App", "Share Application", "Share", "Start Sharing"]
         do {
             try RecordingTestEnvironment.wait(timeout: 8, description: "native picker's \(confirmation.joined(separator: "/")) button") {
-                self.findSystemElement(labels: confirmation, types: [.button]) != nil
+                // Some picker revisions accept the target immediately. Trust
+                // the requesting app's actual authorized-selection state rather
+                // than requiring another button after sharing has started.
+                selectionAccepted() || self.findSystemElement(labels: confirmation, types: [.button]) != nil
             }
+            if selectionAccepted() { return }
             guard let button = findSystemElement(labels: confirmation, types: [.button]) else { throw HarnessError("Native picker confirmation vanished") }
             button.click()
         } catch {
