@@ -10,6 +10,18 @@ The original execute-plan coding run did not execute runtime suites. During the 
 
 Both native schemes passed build-for-testing. Native preflight launched the dedicated recorder and fixtures and passed `HarnessSmokeTests.testPreflight`. The picker cancellation/retry test obtained an authorized window filter and received source frames, but failed its required primary-color marker assertion. Full native recording acceptance remains pending; no assertion was relaxed. The retained failing run is `.build/recording-ui/run-20261012-021202-OvEQHO/RecordingUI.xcresult`, with `probe-evidence.json` beside it. Reproduce with `zsh Scripts/test-recording-ui.sh --preflight`, inspect the captured source and probe color measurement, then rerun the full distribution commands below. macOS 14, two-display behavior, device permissions, and complete recording/export flows still require passing evidence.
 
+### Picker runtime follow-up — 2026-10-12
+
+The reported missing picker and disappearing Wi-Fi/menu items coincided with a Control Center crash. Closed or unrealized AppKit windows can report `windowNumber == -1`; exclusions now retain only valid CGWindowIDs. Presentation is deferred until menu tracking unwinds, and Control Center was relaunched after the earlier crash to restore the system picker service.
+
+Dev and dedicated test executables previously embedded the official bundle identity while their signed app bundles used different identities. The build now embeds the same generated Info.plist that it packages. Native service logs confirm the dedicated recorder's correct identity, and extracted executable metadata matches bundle metadata for the dev and both test distributions.
+
+Picker-only capture also failed after selection because stream-specific configuration changed the issued filter's metadata before capture, producing `matchesPickedContent=0` and error `-3801`. The recorder now keeps the native default configuration stable through the recording and retains the stream without adding configuration overrides. Application selection on this OS returns display style (`2`), one application, and one display; validation accepts this restricted filter and rejects invalid target counts. Self-tests cover these cases and a real unrealized NSWindow's invalid ID.
+
+On macOS 26.6.2, `RecordingUITests.testSystemPickerFromRecordingShortcutsAndCancelEditor` passed for both window and application scopes: global start shortcut → real native selection → available capture → explicit Stop Recording menu → exactly one editor → cancel → ready for another recording. The driver uses the actual native Share button's window-center position on macOS 26, whose picker controls are absent from the accessibility tree, and requires the recorder to accept the OS-issued selection. It never constructs a replacement filter. Standard and App Store self-tests passed, both app variants built, and the dev bundle's signature verified.
+
+The passing native result is `.build/recording-ui/picker-menu-live/PickerFlow.xcresult`. Full recording/export/privacy and hardware acceptance remains pending. A separate Control+5 stop attempt failed on this desktop: enabled macOS symbolic shortcuts `122` and `132` consume Control+5 and Control+Shift+5. Use the Stop Recording menu here, or choose an available shortcut through Settings; the required stop-shortcut test remains intact and needs an environment without those system conflicts.
+
 ## Test layers
 
 | Layer | What it checks | Requires capture permission? |

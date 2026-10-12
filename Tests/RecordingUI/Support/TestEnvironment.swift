@@ -96,14 +96,20 @@ struct RecordingTestEnvironment {
         for (identifier, enabled) in [("settings.record.systemAudio", systemAudio), ("settings.record.microphone", false), ("settings.record.webcamEnabled", false)] {
             let checkbox = element(identifier, in: recorder)
             guard checkbox.waitForExistence(timeout: 5), checkbox.isEnabled,
-                  let value = checkbox.value as? String, ["0", "1"].contains(value) else {
+                  let checked = checkboxState(checkbox) else {
                 throw HarnessError("Cannot configure \(identifier) through actual Settings. \(settingsWindow.debugDescription)")
             }
-            if (value == "1") != enabled { checkbox.click() }
-            guard checkbox.value as? String == (enabled ? "1" : "0") else { throw HarnessError("Settings did not accept \(identifier)=\(enabled)") }
+            if checked != enabled { checkbox.click() }
+            guard checkboxState(checkbox) == enabled else { throw HarnessError("Settings did not accept \(identifier)=\(enabled)") }
         }
         settingsWindow.buttons[XCUIIdentifierCloseWindow].click()
         try wait(description: "Settings closed and global shortcuts restored") { !settingsWindow.exists }
+    }
+    private static func checkboxState(_ checkbox: XCUIElement) -> Bool? {
+        let value = checkbox.value
+        if let text = value as? String, ["0", "1"].contains(text) { return text == "1" }
+        if let number = value as? NSNumber, [0.0, 1.0].contains(number.doubleValue) { return number.boolValue }
+        return nil
     }
     func launch(_ app: XCUIApplication, arguments: [String] = []) {
         app.launchEnvironment["ZOOMIT_UI_ARTIFACTS"] = artifacts.path

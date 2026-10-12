@@ -1135,11 +1135,12 @@ final class RecordingController {
         try stream.addStreamOutput(source, type: .screen, sampleHandlerQueue: source.queue)
         if settings.recordSystemAudio { try stream.addStreamOutput(source, type: .audio, sampleHandlerQueue: source.queue) }
         self.stream = stream
-        pickerController?.bind(stream: stream)
         if wantsMic, let device = AudioDevices.microphone(forID: settings.microphoneDeviceID) {
             try? setupMicrophone(device: device, engine: engine, windNoiseRemoval: settings.recordNoiseCancellation)
         }
         try await stream.startCapture()
+        // Retain the picker-authorized stream until manual recording completion.
+        pickerController?.bind(stream: stream)
     }
 
     func updateIsolatedPresentationHost(frame: CGRect) {

@@ -226,6 +226,16 @@ final class RecordingUITests: XCTestCase {
         try cancelEditor()
     }
 
+    func testSystemPickerFromRecordingShortcutsAndCancelEditor() throws {
+        // Start both modes through their global shortcuts, then exercise the
+        // explicit Stop menu action. Stop shortcuts have their own test above.
+        for scope: NativePickerDriver.Scope in [.window, .application] {
+            try start(scope, shortcut: true)
+            try stop()
+            try cancelEditor()
+        }
+    }
+
     func testSelectedAppAudioRejectsOtherApplicationTonesForBothScopes() throws {
         try RecordingTestEnvironment.configureRecorder(recorder, systemAudio: true)
         try fixture("fixture.tone")

@@ -5,12 +5,19 @@ import XCTest
 final class NativePickerDriver {
     enum Scope { case window, application }
     private let test: XCTestCase
-    private let systemApps = [
-        XCUIApplication(bundleIdentifier: "com.apple.controlcenter"),
-        XCUIApplication(bundleIdentifier: "com.apple.screencaptureui"),
-        XCUIApplication(bundleIdentifier: "com.apple.WindowManager"),
-        XCUIApplication(bundleIdentifier: "com.apple.systemuiserver")
-    ]
+    private let systemApps: [XCUIApplication] = {
+        var apps = [
+            XCUIApplication(bundleIdentifier: "com.apple.controlcenter"),
+            XCUIApplication(bundleIdentifier: "com.apple.screencaptureui"),
+            XCUIApplication(bundleIdentifier: "com.apple.systemuiserver")
+        ]
+        // Tahoe's WindowManager does not answer picker accessibility snapshots;
+        // retain the real Control Center tree and desktop screenshot instead.
+        if #unavailable(macOS 26.0) {
+            apps.append(XCUIApplication(bundleIdentifier: "com.apple.WindowManager"))
+        }
+        return apps
+    }()
     private var requestingApps: [XCUIApplication] = []
     init(test: XCTestCase) { self.test = test }
     func include(_ app: XCUIApplication) { requestingApps.append(app) }
@@ -20,6 +27,22 @@ final class NativePickerDriver {
         include(targetApp)
         let target = targetApp.windows[windowTitle]
         guard target.waitForExistence(timeout: 8) else { throw HarnessError("Missing fixture target \(windowTitle)") }
+        if #available(macOS 26.0, *) {
+            // Tahoe draws the native Share button at each window's center,
+            // without exposing those controls in its accessibility tree. Both
+            // requesters pin the scope, so select the actual target using public
+            // pointer events and require the OS-issued selection to be accepted.
+            let choice = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            choice.hover()
+            choice.click()
+            do {
+                try RecordingTestEnvironment.wait(timeout: 12, description: "requester accepts native \(scope) selection", condition: selectionAccepted)
+            } catch {
+                attachDiagnostics("picker-selection-failed")
+                throw error
+            }
+            return
+        }
         let modeLabels = scope == .window ? ["Window", "Windows"] : ["Application", "Applications", "App"]
         clickSystemElement(labels: modeLabels, types: [.radioButton, .button, .popUpButton])
         // Some OS revisions show a chooser; others use a pointer highlight on the actual window.

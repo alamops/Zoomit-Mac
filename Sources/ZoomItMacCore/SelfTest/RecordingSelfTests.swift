@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 import CoreMedia
 
 @MainActor
@@ -6,10 +7,49 @@ enum RecordingSelfTests {
     static func run() throws {
         try geometryAndMapping()
         try lifecycleAndGeneration()
+        try pickerWindowIDValidation()
+        try pickerSelectionValidation()
         try sourcePolicyAndTimeline()
         try renderingIsolationAndOrientation()
         try annotationEquivalenceAndHighlights()
         try webcamPlacementAndAspect()
+    }
+
+    private static func pickerWindowIDValidation() throws {
+        let invalid = [Int.min, -1, 0, Int(UInt32.max) + 1, Int.max]
+        try expect(RecordingPickerController.validExcludedWindowIDs(invalid).isEmpty,
+                   "closed/unrealized/out-of-range windows must not be sent to the system picker")
+        try expect(RecordingPickerController.validExcludedWindowIDs([-1, 17, 0, 42, Int.max]) == [17, 42],
+                   "valid own-window exclusions remain intact alongside closed windows")
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 32, height: 32),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        try expect(window.windowNumber == -1 && RecordingPickerController.validExcludedWindowIDs([window.windowNumber]).isEmpty,
+                   "real unrealized AppKit windows reproduce the invalid window-ID case")
+    }
+
+    private static func pickerSelectionValidation() throws {
+        try expect(RecordingPickerController.validSelection(scope: .application, style: .display,
+                   windowCount: 0, applicationCount: 1, displayCount: 1),
+                   "native application selection is a display-style filter restricted to one app")
+        for counts in [(0, 1), (2, 1), (1, 0), (1, 2)] {
+            try expect(!RecordingPickerController.validSelection(scope: .application, style: .display,
+                       applicationCount: counts.0, displayCount: counts.1),
+                       "application mode rejects unrestricted, multi-app and multi-display filters")
+        }
+        try expect(!RecordingPickerController.validSelection(scope: .window, style: .display,
+                   windowCount: 1, applicationCount: 1, displayCount: 1),
+                   "window mode cannot accept a display/application selection")
+        try expect(!RecordingPickerController.validSelection(scope: .application, style: .window,
+                   windowCount: 1, applicationCount: 1, displayCount: 1),
+                   "application mode cannot accept a single-window selection")
+        try expect(RecordingPickerController.validSelection(scope: .window, style: .window, windowCount: 1)
+                   && !RecordingPickerController.validSelection(scope: .window, style: .window, windowCount: 2),
+                   "window mode requires exactly one target")
+        try expect(RecordingPickerController.validSelection(scope: .application, style: .display)
+                   && RecordingPickerController.validSelection(scope: .window, style: .window),
+                   "opaque older-OS filters remain usable under the pinned native picker mode")
     }
 
     private static func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {

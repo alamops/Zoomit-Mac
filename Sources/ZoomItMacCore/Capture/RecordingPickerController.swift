@@ -29,24 +29,48 @@ final class RecordingPickerController: NSObject, SCContentSharingPickerObserver 
         self.completion = completion
         configuration.allowedPickerModes = scope == .window ? .singleWindow : .singleApplication
         configuration.excludedBundleIDs = Bundle.main.bundleIdentifier.map { [$0] } ?? []
-        configuration.excludedWindowIDs = NSApp.windows.map { $0.windowNumber }
+        configuration.excludedWindowIDs = Self.validExcludedWindowIDs(NSApp.windows.map { $0.windowNumber })
         configuration.allowsChangingSelectedContent = false
         previousConfiguration = picker.defaultConfiguration
         previouslyActive = picker.isActive
         picker.add(self)
         observing = true
         picker.defaultConfiguration = configuration
-        picker.isActive = true
-        picker.present(using: scope == .window ? .window : .application)
+        // Status-menu actions run before menu tracking has unwound. Presenting
+        // there can leave the system selection UI obscured or without focus.
+        // Use the normal chooser entry point; allowedPickerModes pins the scope.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.observing, self.completion != nil else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            self.picker.isActive = true
+            self.picker.present()
+        }
+    }
+
+    /// Closed or not-yet-shown AppKit windows report -1. The system picker
+    /// consumes these as unsigned CGWindowIDs; invalid values can crash its UI.
+    static func validExcludedWindowIDs(_ windowNumbers: [Int]) -> [Int] {
+        windowNumbers.filter { $0 > 0 && $0 <= Int(UInt32.max) }
+    }
+
+    static func validSelection(scope: RecordingScope, style: SCShareableContentStyle,
+                               windowCount: Int? = nil, applicationCount: Int? = nil,
+                               displayCount: Int? = nil) -> Bool {
+        if scope == .window {
+            return style == .window && (windowCount == nil || windowCount == 1)
+        }
+        // Application selection is a display stream restricted to one app, not
+        // necessarily an application-style filter. Keep the native authorization.
+        guard scope == .application, style == .application || style == .display else { return false }
+        if applicationCount == nil && displayCount == nil { return true }
+        return applicationCount == 1 && displayCount == 1
     }
 
     func bind(stream: SCStream) {
         boundStream = stream
-        picker.setConfiguration(configuration, for: stream)
-        // Default configuration only applies to unbound selection. Restore it
-        // immediately after binding, retaining this stream's scoped settings.
-        if let previousConfiguration { picker.defaultConfiguration = previousConfiguration }
-        previousConfiguration = nil
+        // The stable default configuration already pins this session's scope
+        // and disallows repicking. A stream-specific override would mutate the
+        // issued filter's metadata and invalidate picker-only authorization.
     }
 
     func finish() {
@@ -54,7 +78,6 @@ final class RecordingPickerController: NSObject, SCContentSharingPickerObserver 
         observing = false
         completion = nil
         picker.remove(self)
-        if let boundStream { picker.setConfiguration(nil, for: boundStream) }
         boundStream = nil
         if let previousConfiguration { picker.defaultConfiguration = previousConfiguration }
         previousConfiguration = nil
@@ -71,13 +94,18 @@ final class RecordingPickerController: NSObject, SCContentSharingPickerObserver 
         let box = FilterBox(filter: filter)
         Task { @MainActor [weak self] in
             guard let self, self.observing, self.completion != nil else { return }
-            let expected: SCShareableContentStyle = self.scope == .window ? .window : .application
-            guard box.filter.style == expected else { self.resolve(.failure(PickerError.unexpectedSelection)); return }
+            let valid: Bool
             if #available(macOS 15.2, *) {
-                let valid = self.scope == .window ? box.filter.includedWindows.count == 1
-                    : box.filter.includedApplications.count == 1 && box.filter.includedDisplays.count == 1
-                guard valid else { self.resolve(.failure(PickerError.unexpectedSelection)); return }
+                valid = Self.validSelection(scope: self.scope, style: box.filter.style,
+                    windowCount: box.filter.includedWindows.count,
+                    applicationCount: box.filter.includedApplications.count,
+                    displayCount: box.filter.includedDisplays.count)
+            } else {
+                // The native picker is restricted to exactly the requested mode;
+                // older systems do not expose the filter's identity metadata.
+                valid = Self.validSelection(scope: self.scope, style: box.filter.style)
             }
+            guard valid else { self.resolve(.failure(PickerError.unexpectedSelection)); return }
             self.resolve(.success(box.filter))
         }
     }
