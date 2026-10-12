@@ -94,19 +94,27 @@ final class RecordingUITests: XCTestCase {
         guard panel.waitForExistence(timeout: 30), panel.buttons["Save"].exists else {
             throw HarnessError("Recording editor export did not open the native Save panel. \(recorder.debugDescription)")
         }
+        recorder.activate()
         let url = environment.artifacts.appendingPathComponent("\(label)-\(UUID().uuidString).mp4")
         // Navigate the actual NSSavePanel. This grants the sandbox its normal
         // user-selected destination authorization, with no preference bypass.
         recorder.typeKey("g", modifierFlags: [.command, .shift])
-        let pathField = recorder.dialogs.textFields.firstMatch
+        let pathField = recorder.dialogs.textFields["PathTextField"]
         guard pathField.waitForExistence(timeout: 5) else { throw HarnessError("Native Go to Folder path entry missing") }
+        pathField.typeKey("a", modifierFlags: [.command])
         pathField.typeText(environment.artifacts.path)
-        recorder.typeKey(.return, modifierFlags: [])
+        guard pathField.value as? String == environment.artifacts.path else {
+            throw HarnessError("Native path entry did not accept the requested directory. Actual: \(String(describing: pathField.value)); expected: \(environment.artifacts.path)")
+        }
+        pathField.typeKey(.return, modifierFlags: [])
+        try RecordingTestEnvironment.wait(description: "Go to Folder accepts the export directory") { !pathField.exists }
         let nameField = recorder.dialogs.textFields.matching(NSPredicate(format: "identifier == %@ OR label == %@", "saveAsNameTextField", "Save As:")).firstMatch
         let fallback = recorder.dialogs.textFields.firstMatch
         let entry = nameField.exists ? nameField : fallback
         guard entry.waitForExistence(timeout: 5) else { throw HarnessError("Native save filename field missing") }
-        entry.click(); recorder.typeKey("a", modifierFlags: [.command]); entry.typeText(url.lastPathComponent)
+        entry.click()
+        entry.typeKey("a", modifierFlags: [.command])
+        entry.typeText(url.lastPathComponent)
         let saveButton = recorder.dialogs.buttons["Save"].firstMatch
         guard saveButton.isEnabled else { throw HarnessError("Native save destination is not writable: \(environment.artifacts.path)") }
         saveButton.click()
@@ -167,6 +175,44 @@ final class RecordingUITests: XCTestCase {
         try movie.requireMarker("primary", above: 0.005)
         try movie.requireMarker("second", above: 0.005)
         try movie.requireMarker("dialog", above: 0.003)
+        try movie.exclude(["forbidden"])
+    }
+
+    func testApplicationWindowClicksChangeRecordedStackingOrder() throws {
+        try start(.application)
+        try fixture("fixture.overlapOwnWindows")
+        try hold(1.5)
+        func focus(_ title: String, x: CGFloat) throws {
+            a.windows[title].coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.6)).click()
+            try RecordingTestEnvironment.wait(description: "clicked app window becomes main: \(title)") {
+                RecordingTestEnvironment.element("fixture.focusedWindow", in: self.a).value as? String == "Focused: \(title)"
+            }
+            try hold(2)
+        }
+        try focus("Fixture A Primary", x: 0.1)
+        try focus("Fixture A Second", x: 0.9)
+        try focus("Fixture A Primary", x: 0.1)
+        try stop()
+        let movie = try save("app-window-order")
+        // Equal-size overlapping windows expose the front window's color over
+        // the shared area. Read their stable ordering directly from the MP4,
+        // independent of the native picker's variable pre-recording latency.
+        var runs: [(String, Int)] = []
+        for frame in movie.frames {
+            let difference = frame.fractions["primary", default: 0] - frame.fractions["second", default: 0]
+            guard abs(difference) > 0.005 else { continue }
+            let front = difference > 0 ? "primary" : "second"
+            if runs.last?.0 == front { runs[runs.count - 1].1 += 1 }
+            else { runs.append((front, 1)) }
+        }
+        let stable = runs.filter { $0.1 >= 3 }.map { $0.0 }
+        let expected = ["second", "primary", "second", "primary"]
+        var matched = 0
+        for front in stable where matched < expected.count {
+            if front == expected[matched] { matched += 1 }
+        }
+        XCTAssertEqual(matched, expected.count,
+                       "Saved video must follow each clicked app window. Observed: \(stable). \(movie.summary)")
         try movie.exclude(["forbidden"])
     }
 

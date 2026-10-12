@@ -40,7 +40,12 @@ final class PickerCompatibilityTests: XCTestCase {
         }
         try waitForMarker("primary", above: scope == .window ? 0.2 : 0.005)
         let filter = try XCTUnwrap(environment.evidence()["filter"] as? [String: Any])
-        XCTAssertEqual(filter["style"] as? Int, scope == .window ? SCShareableContentStyle.window.rawValue : SCShareableContentStyle.application.rawValue)
+        let style = try XCTUnwrap(filter["style"] as? Int)
+        if scope == .window { XCTAssertEqual(style, SCShareableContentStyle.window.rawValue) }
+        else {
+            XCTAssertTrue([SCShareableContentStyle.application.rawValue, SCShareableContentStyle.display.rawValue].contains(style),
+                          "Native single-app selection may be a display-style filter restricted to that app")
+        }
         if #available(macOS 15.2, *) {
             if scope == .application {
                 XCTAssertEqual(filter["applications"] as? [String], [RecordingTestEnvironment.fixtureABundleID])
@@ -123,6 +128,28 @@ final class PickerCompatibilityTests: XCTestCase {
         try RecordingTestEnvironment.click("probe.phase.closed", in: probe)
         a.terminate()
         try requireLossSignal(phase: "closed")
+    }
+
+    func testApplicationWindowClicksChangeNativeFrameOrder() throws {
+        try start(.application)
+        try RecordingTestEnvironment.click("fixture.overlapOwnWindows", in: a)
+        for (title, x, marker, other) in [("Fixture A Primary", 0.1, "primary", "second"),
+                                        ("Fixture A Second", 0.9, "second", "primary"),
+                                        ("Fixture A Primary", 0.1, "primary", "second")] {
+            let before = try frameSamples().count
+            a.windows[title].coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.6)).click()
+            try RecordingTestEnvironment.wait(description: "native app window focuses: \(title)") {
+                RecordingTestEnvironment.element("fixture.focusedWindow", in: self.a).value as? String == "Focused: \(title)"
+            }
+            try RecordingTestEnvironment.wait(description: "captured pixels bring \(marker) above \(other)") {
+                guard let frames = try? self.frameSamples() else { return false }
+                return frames.dropFirst(before).contains {
+                    guard let values = $0["markers"] as? [String: Double] else { return false }
+                    return values[marker, default: 0] > values[other, default: 0] + 0.005
+                }
+            }
+        }
+        try assertNoForbiddenFrames()
     }
     private func requireLossSignal(phase: String) throws {
         try RecordingTestEnvironment.wait(timeout: 12, description: "native target-loss signal for \(phase); lack of a signal is a compatibility gate, not permission to reuse stale imagery") {

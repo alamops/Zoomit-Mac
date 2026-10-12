@@ -114,6 +114,7 @@ Run required flows on both macOS 14 and the current supported macOS, and for bot
 | --- | --- | --- |
 | Window picker | Only the selected window is recorded; fixture A's second window and fixture B are absent | Native UI + exported frames |
 | Application picker | Fixture A's windows/new windows/dialogs on the selected display appear; fixture B/desktop/dock are absent | Native UI + exported frames |
+| Application window ordering | Clicking alternating, overlapping windows of the selected app brings the clicked window forward in the native stream and exported video | `testApplicationWindowClicksChangeNativeFrameOrder` + `testApplicationWindowClicksChangeRecordedStackingOrder` |
 | Cancel and retry | No writer/editor starts on cancellation; a later real selection succeeds | Native UI |
 | Rapid repeated start | One picker/recording is created; starts during selection/finalization are rejected | Native UI + state integration tests |
 | Existing screen overlay before selection | Old display pixels/annotations are discarded before target capture | Native UI + exported frames |
@@ -149,3 +150,13 @@ The final frame comes from isolated composition or black in window/application m
 Source closure does not stop the video writer. Actual writer/encoding failure is an error, and must not be disguised as a successfully saved black fallback movie. Save errors should allow choosing another location or explicitly discarding the recording.
 
 Window and application recording use the same configured Record Toggle base. Shift/Option variants are toggled relative to that base; Settings lists the actual shortcuts. Test both default and customized bases that already contain Shift and/or Option, including collisions with another feature's derived variant.
+
+## Application window ordering investigation (2026-10-12)
+
+The new focus fixtures use equally sized overlapping windows and alternate real pointer clicks between their exposed sides. The native source test checks newly captured color markers after each click; the exported-video test requires the corresponding stable window-order sequence and excludes fixture B throughout. A main-window label separately confirms that each click reached the intended app window.
+
+On macOS 26.6.2, `testApplicationWindowClicksChangeRecordedStackingOrder` passed for the standard recorder: native app selection, primary/second/primary pointer clicks, Stop, editor, native Save, decoded MP4 ordering, and exclusion of fixture B in every decoded frame. Result: `/tmp/zoomit-focus-native-edit-menu.xcresult`; saved footage: `.build/qa-focus/app-window-order-9AFA62BB-853D-49ED-A00E-BBAD580247E4.mp4`. The Save destination was selected through `/tmp/zoomit-qa-order`, a symlink to the test-owned artifact directory, to avoid the earlier desktop path-entry interference. Standard and App Store self-tests passed. App Store native focus acceptance and macOS 14 remain pending.
+
+The Save tests exposed two separate problems: the harness queried the wrong Go to Folder text field (corrected to `PathTextField`), and the app had no main Edit menu, so Command+A inserted the requested filename into the suggested filename rather than replacing it. Installing responder-chain Cut/Copy/Paste/Select All commands corrected filename entry and allowed the complete export test to pass. The independent source probe still cancels during native picker selection and captures no frames; its source-order test remains unverified. Retained failing probe result: `/tmp/zoomit-focus-native-active.xcresult`.
+
+The owner initially reported the issue during ordinary application recording, then confirmed that recording was working and that the remaining concern was saving to the correct path. After the successful export test, the owner confirmed that everything was working and requested commit/push. The fixture recording follows window order without changing production capture code. Ordinary recording does not create a zoom overlay. During isolated Live Zoom, `ZoomCanvasView` deliberately captures mouse events because its fitted content coordinates differ from desktop coordinates; its non-drawing live-mode mouse handler consumes clicks. Escape dismisses that overlay while recording continues.

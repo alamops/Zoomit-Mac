@@ -14,12 +14,13 @@ struct FixtureMain {
     }
 }
 
-final class FixtureDelegate: NSObject, NSApplicationDelegate {
+final class FixtureDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let isB = Bundle.main.bundleIdentifier?.hasSuffix("fixtureb") == true
     private var primary: NSWindow?
     private var second: NSWindow?
     private var dialog: NSWindow?
     private var controls: NSWindow!
+    private let focusedWindow = NSTextField(labelWithString: "Focused: none")
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private var tonePlaying = false
@@ -37,7 +38,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         root.submenu = menu
         appMenu.addItem(root)
         NSApplication.shared.mainMenu = appMenu
-        controls = NSWindow(contentRect: NSRect(x: 40, y: 60, width: 330, height: 520),
+        controls = NSWindow(contentRect: NSRect(x: 40, y: 60, width: 330, height: 600),
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         controls.title = "Fixture \(name) Controls"
         controls.setAccessibilityIdentifier("fixture.controls")
@@ -46,6 +47,8 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         stack.orientation = .vertical
         stack.spacing = 5
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        focusedWindow.setAccessibilityIdentifier("fixture.focusedWindow")
+        stack.addArrangedSubview(focusedWindow)
         let items: [(String, String, Selector)] = [
             ("Open Primary", "fixture.openPrimary", #selector(openPrimary)),
             ("Open Second", "fixture.openSecond", #selector(openSecond)),
@@ -61,6 +64,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
             ("Primary to Next Display", "fixture.nextDisplay", #selector(nextDisplay)),
             ("Second to Next Display", "fixture.secondNextDisplay", #selector(secondNextDisplay)),
             ("Overlap Forbidden Window", "fixture.overlap", #selector(overlap)),
+            ("Overlap App Windows", "fixture.overlapOwnWindows", #selector(overlapOwnWindows)),
             ("Toggle Animation", "fixture.animation", #selector(toggleAnimation)),
             ("Toggle Tone", "fixture.tone", #selector(toggleTone)),
             ("Quit Fixture", "fixture.quit", #selector(quit))
@@ -83,6 +87,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         window.title = "Fixture \(name) \(role)"
         window.setAccessibilityIdentifier("fixture.\(role.lowercased())")
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.contentView = MarkerView(role: isB ? "forbidden" : role.lowercased())
         window.orderFront(nil)
         return window
@@ -127,6 +132,16 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         guard let primary else { return }
         primary.setFrameOrigin(NSPoint(x: 470, y: 250))
         primary.orderFrontRegardless()
+    }
+    @objc private func overlapOwnWindows() {
+        guard let primary, let second else { return }
+        primary.setFrameOrigin(NSPoint(x: 430, y: 220))
+        second.setFrame(NSRect(x: 560, y: 270, width: primary.frame.width, height: primary.frame.height), display: true)
+        second.makeKeyAndOrderFront(nil)
+    }
+    func windowDidBecomeMain(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        focusedWindow.stringValue = "Focused: \(window.title)"
     }
     @objc private func toggleAnimation() {
         animate.toggle()

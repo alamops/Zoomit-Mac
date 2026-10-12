@@ -67,6 +67,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             userSelectedResourceAccess: userSelectedResourceAccess
         )
 
+        installMainMenu(controller: appController!)
         statusItem = makeStatusItem(controller: appController!)
         modeCoordinator.onRecordingSessionStateChanged = { [weak self] state in
             self?.updateRecordingMenu(state)
@@ -87,6 +88,32 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         SingleInstance.release()
+    }
+
+    /// AppKit routes Command-A/C/X/V through the main menu's responder-chain
+    /// actions. A status menu alone leaves native text fields and save panels
+    /// without those editing commands when our ordinary windows are active.
+    private func installMainMenu(controller: AppController) {
+        let main = NSMenu()
+        let application = NSMenuItem()
+        let applicationMenu = NSMenu(title: "ZoomIt")
+        let settings = NSMenuItem(title: "Settings…", action: #selector(AppController.showSettings), keyEquivalent: ",")
+        settings.target = controller
+        applicationMenu.addItem(settings)
+        applicationMenu.addItem(.separator())
+        applicationMenu.addItem(withTitle: "Quit ZoomIt", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        application.submenu = applicationMenu
+        main.addItem(application)
+
+        let edit = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.submenu = editMenu
+        main.addItem(edit)
+        NSApp.mainMenu = main
     }
 
     /// Swaps the menu-bar icon for a red record indicator while recording.

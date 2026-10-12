@@ -95,10 +95,15 @@ final class PickerProbeDelegate: NSObject, NSApplicationDelegate, SCContentShari
         configuration.excludedBundleIDs = [Bundle.main.bundleIdentifier!]
         configuration.allowsChangingSelectedContent = false
         picker.defaultConfiguration = configuration
-        picker.isActive = true
         setStatus("selecting")
         record("selectionRequested", details: ["mode": mode, "generation": generation])
-        picker.present(using: mode == "window" ? .window : .application)
+        // Match the recorder's normal picker entry point with its pinned scope.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.status.stringValue == "selecting" else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            self.picker.isActive = true
+            self.picker.present()
+        }
     }
 
     func contentSharingPicker(_ picker: SCContentSharingPicker, didCancelFor stream: SCStream?) {
