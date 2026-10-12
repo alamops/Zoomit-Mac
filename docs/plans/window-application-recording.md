@@ -312,3 +312,5 @@ There is no owner-deferred remainder.
 - Wave 1 completed: I1 (foundation agent) and I2 (ui_harness agent); standard and App Store `swift build` passed; XCTest `build-for-testing` passed; script/plist/project syntax checked. No runtime suites executed.
 
 - Wave 1 follow-up: final compatibility-test edit exposed an explicit-self closure compile error after the initial checkpoint. Corrected it and confirmed `build-for-testing` succeeds before advancing.
+
+- Wave 2 completed: I3 capture_backend, I4 isolated_overlay, I5 foundation. Both standard and App Store builds passed after final visibility and overlay-allocation changes. Root completed the small remaining removal of the temporary Boolean API and forced authorized-target visibility refresh before final-frame rendering. Native UI suites remain unexecuted.

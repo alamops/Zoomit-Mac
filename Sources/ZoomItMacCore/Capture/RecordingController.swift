@@ -5,13 +5,13 @@ import AppKit
 /// Wraps a CMSampleBuffer so it can be handed from capture callbacks to the
 /// writer queue. CMSampleBuffer is immutable once delivered and the writer
 /// serialises all access.
-private struct SampleBufferBox: @unchecked Sendable {
+struct SampleBufferBox: @unchecked Sendable {
     let buffer: CMSampleBuffer
 }
 
 private let recordingSyntheticFrameDuration = CMTime(value: 1, timescale: 10)
 
-private struct RecordingImageFrame: @unchecked Sendable {
+struct RecordingImageFrame: @unchecked Sendable {
     let image: CGImage
     let presentationTime: CMTime
     let duration: CMTime
@@ -26,7 +26,7 @@ private struct RecordingImageFrame: @unchecked Sendable {
 /// Owns the AVAssetWriter and serialises all sample appends on its own queue so
 /// it can safely receive buffers from the ScreenCaptureKit and microphone
 /// capture callbacks (which run on background queues).
-private final class RecordingEngine: @unchecked Sendable {
+final class RecordingEngine: @unchecked Sendable {
     let url: URL
     private let queue = DispatchQueue(label: "com.zoomitmac.recorder")
     private let writer: AVAssetWriter
@@ -44,9 +44,16 @@ private final class RecordingEngine: @unchecked Sendable {
     private var lastVideoPresentationTime: CMTime?
     private var lastVideoDuration = recordingSyntheticFrameDuration
     private var finished = false
+    private var failureReported = false
+    private let permitsFallback: Bool
+    private let onFailure: (@Sendable (Error) -> Void)?
+    private let pendingImageLock = NSLock()
+    private var imagePending = false
 
-    init(url: URL, width: Int, height: Int, systemAudio: Bool, microphone: Bool) throws {
+    init(url: URL, width: Int, height: Int, systemAudio: Bool, microphone: Bool, permitsFallback: Bool = true, onFailure: (@Sendable (Error) -> Void)? = nil) throws {
         self.url = url
+        self.permitsFallback = permitsFallback
+        self.onFailure = onFailure
         self.width = width
         self.height = height
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -84,13 +91,50 @@ private final class RecordingEngine: @unchecked Sendable {
         }
     }
 
-    func startWriting() async {
-        await withCheckedContinuation { continuation in
+    func startWriting() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async {
-                self.writer.startWriting()
-                continuation.resume()
+                if self.writer.startWriting() { continuation.resume() }
+                else { continuation.resume(throwing: self.writer.error ?? ScreenCaptureError.recordingFailed) }
             }
         }
+    }
+
+    /// The pump may publish at most one pending full-size composition. It drops
+    /// obsolete frames when encoding falls behind instead of growing a queue.
+    @discardableResult
+    func appendVideoImageBounded(_ frame: RecordingImageFrame) -> Bool {
+        pendingImageLock.lock()
+        guard !imagePending else { pendingImageLock.unlock(); return false }
+        imagePending = true
+        pendingImageLock.unlock()
+        queue.async {
+            defer {
+                self.pendingImageLock.lock()
+                self.imagePending = false
+                self.pendingImageLock.unlock()
+            }
+            guard !self.finished else { return }
+            guard self.writer.status == .writing else { self.reportFailureIfNeeded(); return }
+            guard let buffer = self.makeSampleBuffer(from: frame.image,
+                presentationTime: self.monotonicVideoPresentationTime(for: frame.presentationTime), duration: frame.duration) else {
+                self.reportFailure(ScreenCaptureError.recordingFailed)
+                return
+            }
+            self.appendVideoOnQueue(buffer)
+            self.reportFailureIfNeeded()
+        }
+        return true
+    }
+
+    private func reportFailureIfNeeded() {
+        if writer.status == .failed { reportFailure(writer.error ?? ScreenCaptureError.recordingFailed) }
+    }
+
+    private func reportFailure(_ error: Error) {
+        guard !failureReported else { return }
+        failureReported = true
+        onFailure?(error)
     }
 
     func appendVideo(_ box: SampleBufferBox) {
@@ -184,7 +228,8 @@ private final class RecordingEngine: @unchecked Sendable {
     func finish(completion: @escaping @Sendable (URL?) -> Void) {
         queue.async {
             guard !self.finished, self.writer.status == .writing else {
-                self.writeFallbackMovie(completion: completion)
+                if self.permitsFallback { self.writeFallbackMovie(completion: completion) }
+                else { completion(nil) }
                 return
             }
             self.finished = true
@@ -199,8 +244,20 @@ private final class RecordingEngine: @unchecked Sendable {
                 if self.writer.status == .completed {
                     completion(url)
                 } else {
-                    self.writeFallbackMovie(completion: completion)
+                    if self.permitsFallback { self.writeFallbackMovie(completion: completion) }
+                    else { completion(nil) }
                 }
+            }
+        }
+    }
+
+    func cancel() async {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                self.finished = true
+                self.writer.cancelWriting()
+                try? FileManager.default.removeItem(at: self.url)
+                continuation.resume()
             }
         }
     }
@@ -705,6 +762,26 @@ final class RecordingController {
     private let settingsStore: SettingsStore
 
     private(set) var isRecording = false
+    private(set) var sessionState = RecordingSessionState()
+    private(set) var isolatedGeometry: RecordingCanvasGeometry?
+    private(set) var isolatedSourceFrame: RecordingSourceFrame?
+    var isolatedGeneration: UInt64 { sessionState.generation }
+    var isIsolatedRecording: Bool { sessionState.scope?.isIsolated == true && isRecording }
+    var isolatedOverlaySnapshotProvider: (@MainActor @Sendable () -> RecordingOverlaySnapshot?)?
+    var onIsolatedSourceChanged: (@MainActor (RecordingSourceFrame?, RecordingCanvasGeometry?, UInt64) -> Void)?
+    var onSessionStateChanged: (@MainActor (RecordingSessionState) -> Void)?
+    private var pickerController: RecordingPickerController?
+    private var sourceSession: RecordingSourceSession?
+    private var frameTimer: Timer?
+    private var isolatedTimeline = RecordingTimeline()
+    private var sourceRevision: UInt64?
+    private var selectedWindowID: CGWindowID?
+    private var selectedProcessID: pid_t?
+    private var selectedCaptureDisplayBounds: CGRect?
+    private var lastIdentityProbe = Date.distantPast
+    private let compositionQueue = DispatchQueue(label: "com.zoomitmac.recording.compositor")
+    private var compositionPending = false
+    private var compositionWaiter: CheckedContinuation<Void, Never>?
     private var isStartingRecording = false
     private var isStoppingRecording = false
     private var isFinalizingRecording = false
@@ -739,16 +816,65 @@ final class RecordingController {
         self.webcam = WebcamOverlayController(permissionService: permissionService)
     }
 
-    /// Toggles recording. When starting, `region` chooses whole-screen vs. a
-    /// dragged region. `onStateChange(true/false)` reports start/stop.
-    func toggle(region: Bool, onStateChange: @escaping (Bool) -> Void) {
-        if isStoppingRecording || isFinalizingRecording || isStartingRecording || clipEditor != nil {
-            NSSound.beep()
-        } else if isRecording {
+    func toggle(scope: RecordingScope, onStateChange: @escaping (Bool) -> Void) {
+        if isRecording && sessionState.canStop {
             stop()
-        } else {
-            self.onStateChange = onStateChange
-            start(region: region)
+            return
+        }
+        guard sessionState.canStart, !isFinalizingRecording, clipEditor == nil else { NSSound.beep(); return }
+        self.onStateChange = onStateChange
+        guard let generation = sessionState.begin(scope: scope) else { return }
+        notifySessionState()
+        if scope.isIsolated { selectIsolatedSource(scope: scope, generation: generation) }
+        else { start(region: scope == .region) }
+    }
+
+    func stopIfRecording() {
+        guard sessionState.canStop else { return }
+        stop()
+    }
+
+    private func notifySessionState() { onSessionStateChanged?(sessionState) }
+
+    private func transition(to phase: RecordingSessionState.Phase) {
+        if sessionState.transition(to: phase, generation: sessionState.generation) { notifySessionState() }
+    }
+
+    private func selectIsolatedSource(scope: RecordingScope, generation: UInt64) {
+        isStartingRecording = true
+        let picker = RecordingPickerController(scope: scope)
+        pickerController = picker
+        picker.present { [weak self] result in
+            guard let self, self.sessionState.generation == generation, self.sessionState.phase == .selecting else { return }
+            switch result {
+            case .success(nil):
+                self.cleanup()
+                self.transition(to: .idle)
+            case .failure(let error):
+                self.cleanup()
+                self.transition(to: .idle)
+                self.presentError(error)
+            case .success(let filter?):
+                self.transition(to: .starting)
+                Task { @MainActor in
+                    do {
+                        try await self.startIsolatedStreaming(filter: filter, scope: scope, generation: generation)
+                        guard self.sessionState.generation == generation, self.sessionState.phase == .starting else { return }
+                        self.isStartingRecording = false
+                        self.isRecording = true
+                        self.transition(to: .recording)
+                        self.onStateChange?(true)
+                        self.startIsolatedFramePump(generation: generation)
+                    } catch {
+                        try? await self.stream?.stopCapture()
+                        await self.engine?.cancel()
+                        self.cleanup()
+                        self.transition(to: .idle)
+                        self.onStateChange?(false)
+                        self.presentError(error)
+                    }
+                }
+            }
         }
     }
 
@@ -758,9 +884,11 @@ final class RecordingController {
 
     private func start(region: Bool) {
         guard ScreenRecordingPrompt.ensureGranted(permissionService) else {
+            transition(to: .idle)
             return
         }
         guard let display = displayManager.activeDisplay() else {
+            transition(to: .idle)
             NSSound.beep()
             return
         }
@@ -772,6 +900,7 @@ final class RecordingController {
                 guard let self else { return }
                 guard let rect else {
                     self.isStartingRecording = false
+                    self.transition(to: .idle)
                     return
                 }
                 self.beginCapture(display: display, sourceRect: rect)
@@ -802,10 +931,16 @@ final class RecordingController {
                 try await self.startStreaming(display: display, sourceRect: sourceRect)
                 self.isStartingRecording = false
                 self.isRecording = true
+                self.transition(to: .recording)
+                _ = self.sessionState.setAvailability(.available, generation: self.isolatedGeneration)
+                self.notifySessionState()
                 self.onStateChange?(true)
             } catch {
                 self.isStartingRecording = false
+                try? await self.stream?.stopCapture()
+                await self.engine?.cancel()
                 self.cleanup()
+                self.transition(to: .idle)
                 self.presentError(error)
                 self.onStateChange?(false)
             }
@@ -909,7 +1044,7 @@ final class RecordingController {
             systemAudio: wantsSystemAudio,
             microphone: wantsMic
         )
-        await engine.startWriting()
+        try await engine.startWriting()
         self.engine = engine
 
         let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
@@ -932,6 +1067,178 @@ final class RecordingController {
         }
 
         try await stream.startCapture()
+    }
+
+    private func startIsolatedStreaming(filter: SCContentFilter, scope: RecordingScope, generation: UInt64) async throws {
+        guard let display = displayManager.activeDisplay() else { throw ScreenCaptureError.displayNotFound }
+        // contentRect/pointPixelScale come from the actual authorized filter,
+        // including opaque macOS 14 picker filters. Never infer a target ID.
+        let geometry = try RecordingCanvasGeometry(logicalSize: filter.contentRect.size,
+            pixelScale: CGFloat(filter.pointPixelScale), hostDisplayFrame: display.frame)
+        isolatedGeometry = geometry
+        isolatedTimeline = RecordingTimeline()
+        sourceRevision = nil
+        selectedWindowID = nil
+        selectedProcessID = nil
+        selectedCaptureDisplayBounds = nil
+        if #available(macOS 15.2, *) {
+            if scope == .window {
+                selectedWindowID = filter.includedWindows.first?.windowID
+                selectedProcessID = filter.includedWindows.first?.owningApplication?.processID
+            } else {
+                selectedProcessID = filter.includedApplications.first?.processID
+                if let selectedDisplay = filter.includedDisplays.first {
+                    selectedCaptureDisplayBounds = CGDisplayBounds(selectedDisplay.displayID)
+                }
+            }
+        }
+        let settings = settingsStore.load()
+        await webcam.startIsolated(settings: settings, geometry: geometry)
+        let wantsMic = settings.recordMicrophone && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ZoomIt-\(UUID().uuidString).mp4")
+        let engine = try RecordingEngine(url: url, width: geometry.outputWidth, height: geometry.outputHeight,
+            systemAudio: settings.recordSystemAudio, microphone: wantsMic, permitsFallback: false,
+            onFailure: { [weak self] error in
+                Task { @MainActor in
+                    guard let self, self.sessionState.generation == generation, self.sessionState.canStop else { return }
+                    self.stop()
+                    // Finalization reports the genuine writer failure once.
+                    _ = error
+                }
+            })
+        self.engine = engine
+        try await engine.startWriting()
+        let source = RecordingSourceSession(generation: generation, audioSink: { sample in
+            engine.appendSystemAudio(SampleBufferBox(buffer: sample))
+        })
+        sourceSession = source
+        let configuration = SCStreamConfiguration()
+        configuration.width = geometry.outputWidth
+        configuration.height = geometry.outputHeight
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        configuration.queueDepth = 5
+        configuration.scalesToFit = true
+        configuration.preservesAspectRatio = true
+        configuration.backgroundColor = source.backgroundColor // property is unowned(unsafe)
+        configuration.showsCursor = true
+        configuration.capturesAudio = settings.recordSystemAudio
+        configuration.excludesCurrentProcessAudio = true
+        configuration.sampleRate = 48_000
+        configuration.channelCount = 2
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: source)
+        try stream.addStreamOutput(source, type: .screen, sampleHandlerQueue: source.queue)
+        if settings.recordSystemAudio { try stream.addStreamOutput(source, type: .audio, sampleHandlerQueue: source.queue) }
+        self.stream = stream
+        pickerController?.bind(stream: stream)
+        if wantsMic, let device = AudioDevices.microphone(forID: settings.microphoneDeviceID) {
+            try? setupMicrophone(device: device, engine: engine, windNoiseRemoval: settings.recordNoiseCancellation)
+        }
+        try await stream.startCapture()
+    }
+
+    func updateIsolatedPresentationHost(frame: CGRect) {
+        guard let old = isolatedGeometry,
+              let geometry = try? RecordingCanvasGeometry(logicalSize: old.logicalSize, pixelScale: old.pixelScale,
+                                                         hostDisplayFrame: frame) else { return }
+        webcam.updateIsolatedPresentation(from: old, to: geometry)
+        isolatedGeometry = geometry
+    }
+
+    private func startIsolatedFramePump(generation: UInt64) {
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.sessionState.generation == generation, self.sessionState.canStop else { return }
+                self.pumpIsolatedFrame()
+            }
+        }
+        frameTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        pumpIsolatedFrame()
+    }
+
+    private func publishIsolatedSource() {
+        guard let snapshot = sourceSession?.snapshot(), sourceRevision != snapshot.revision else { return }
+        sourceRevision = snapshot.revision
+        isolatedSourceFrame = snapshot.frame
+        if sessionState.availability != snapshot.frame.availability {
+            _ = sessionState.setAvailability(snapshot.frame.availability, generation: isolatedGeneration)
+            notifySessionState()
+        }
+        onIsolatedSourceChanged?(isolatedSourceFrame, isolatedGeometry, isolatedGeneration)
+        if snapshot.frame.availability == .ended, let nativeStream = stream {
+            stream = nil
+            Task { try? await nativeStream.stopCapture() }
+        }
+    }
+
+    private func pumpIsolatedFrame() {
+        publishIsolatedSource()
+        checkIsolatedTargetIdentity()
+        guard !compositionPending, let geometry = isolatedGeometry, let engine else { return }
+        let source = isolatedSourceFrame
+        let overlay = isolatedOverlaySnapshotProvider?()
+        let webcam = webcam.isolatedRecordingSnapshot(geometry: geometry)
+        let generation = isolatedGeneration
+        let time = isolatedTimeline.nextPresentationTime(hostTime: CMClockGetTime(CMClockGetHostTimeClock()))
+        let duration = isolatedTimeline.frameDuration
+        compositionPending = true
+        compositionQueue.async { [weak self] in
+            if let image = RecordingFrameRenderer.render(source: source, overlay: overlay, geometry: geometry,
+                                                         webcam: webcam, generation: generation) {
+                engine.appendVideoImageBounded(RecordingImageFrame(image: image, presentationTime: time, duration: duration))
+            }
+            Task { @MainActor in
+                guard let self else { return }
+                self.compositionPending = false
+                let waiter = self.compositionWaiter
+                self.compositionWaiter = nil
+                waiter?.resume()
+            }
+        }
+    }
+
+    private func waitForIsolatedComposition() async {
+        guard compositionPending else { return }
+        await withCheckedContinuation { compositionWaiter = $0 }
+    }
+
+    private func checkIsolatedTargetIdentity(force: Bool = false) {
+        // On newer systems use exact identities from the authorized filter.
+        // Public window-list metadata reads no screen pixels and does not
+        // initiate another blanket Screen Recording authorization request.
+        guard sessionState.availability != .ended else { return }
+        if let pid = selectedProcessID {
+            guard let application = NSRunningApplication(processIdentifier: pid), !application.isTerminated else {
+                sourceSession?.end()
+                publishIsolatedSource()
+                return
+            }
+            sourceSession?.setApplicationHidden(application.isHidden)
+            publishIsolatedSource()
+        }
+        guard force || Date().timeIntervalSince(lastIdentityProbe) >= 1,
+              selectedWindowID != nil || selectedCaptureDisplayBounds != nil else { return }
+        lastIdentityProbe = Date()
+        guard let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] else { return }
+        if let id = selectedWindowID {
+            guard let window = windows.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }) else {
+                sourceSession?.end()
+                publishIsolatedSource()
+                return
+            }
+            if let visible = window[kCGWindowIsOnscreen as String] as? Bool { sourceSession?.setTargetVisible(visible) }
+        } else if let pid = selectedProcessID, let displayBounds = selectedCaptureDisplayBounds {
+            let visible = windows.contains { window in
+                guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+                      window[kCGWindowIsOnscreen as String] as? Bool == true,
+                      let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                      let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
+                return rect.intersects(displayBounds)
+            }
+            sourceSession?.setTargetVisible(visible)
+        }
+        publishIsolatedSource()
     }
 
     private func composite(_ webcamFrame: WebcamRecordingFrame, over overlayImage: CGImage, display: DisplayDescriptor, sourceRect: CGRect?) -> CGImage {
@@ -1001,15 +1308,31 @@ final class RecordingController {
     }
 
     private func stop() {
-        guard isRecording, !isStoppingRecording else { return }
+        guard isRecording, !isStoppingRecording, sessionState.canStop else { return }
+        let generation = isolatedGeneration
+        let isolated = isIsolatedRecording
+        let stopTime = CMClockGetTime(CMClockGetHostTimeClock())
+        frameTimer?.invalidate()
+        frameTimer = nil
+        var isolatedFinalImage: CGImage?
+        if isolated {
+            checkIsolatedTargetIdentity(force: true)
+            publishIsolatedSource()
+            if let geometry = isolatedGeometry {
+                isolatedFinalImage = RecordingFrameRenderer.render(source: isolatedSourceFrame,
+                    overlay: isolatedOverlaySnapshotProvider?(), geometry: geometry,
+                    webcam: webcam.isolatedRecordingSnapshot(geometry: geometry), generation: generation)
+            }
+        }
+        let finalImage = isolatedFinalImage.map { RecordingImageFrame(image: $0, presentationTime: stopTime,
+                                                                     duration: isolatedTimeline.frameDuration) }
         isStoppingRecording = true
         isFinalizingRecording = true
+        transition(to: .stopping)
         hideBorder()
-
         captureSession?.stopRunning()
         captureSession = nil
         micOutput = nil
-
         let engine = self.engine
         let stream = self.stream
         let streamOutput = self.streamOutput
@@ -1019,33 +1342,64 @@ final class RecordingController {
         self.streamOutput = nil
         self.recordingDisplay = nil
         self.recordingSourceRect = nil
+        sourceSession?.invalidate()
+        pickerController?.finish()
+        pickerController = nil
 
         Task { @MainActor in
             try? await stream?.stopCapture()
-            await streamOutput?.waitForPendingOverlayFrame()
-            streamOutput?.appendFinalOverlayFrameIfNeeded(presentationTime: CMClockGetTime(CMClockGetHostTimeClock()))
-            if let recordingDisplay,
-               let image = try? await self.captureFallbackFrame(display: recordingDisplay, sourceRect: recordingSourceRect) {
-                engine?.appendVideoImageAtEnd(RecordingImageFrame(image: image, presentationTime: CMClockGetTime(CMClockGetHostTimeClock())))
+            if isolated {
+                await self.waitForIsolatedComposition()
+                if let finalImage { engine?.appendVideoImageAtEnd(finalImage) }
+            } else {
+                await streamOutput?.waitForPendingOverlayFrame()
+                streamOutput?.appendFinalOverlayFrameIfNeeded(presentationTime: stopTime)
+                if let recordingDisplay,
+                   let image = try? await self.captureFallbackFrame(display: recordingDisplay, sourceRect: recordingSourceRect) {
+                    engine?.appendVideoImageAtEnd(RecordingImageFrame(image: image, presentationTime: CMClockGetTime(CMClockGetHostTimeClock())))
+                }
             }
-            engine?.appendBlackVideoFrameIfNeeded(presentationTime: CMClockGetTime(CMClockGetHostTimeClock()))
+            engine?.appendBlackVideoFrameIfNeeded(presentationTime: stopTime)
             self.webcam.stop()
             await engine?.waitForQueuedAppends()
-            engine?.finish { url in
+            guard let engine else {
+                self.cleanup()
+                self.transition(to: .idle)
+                self.onStateChange?(false)
+                self.presentError(ScreenCaptureError.recordingFailed)
+                return
+            }
+            engine.finish { url in
                 Task { @MainActor in
+                    guard self.sessionState.generation == generation, self.sessionState.phase == .stopping else { return }
                     self.engine = nil
                     self.isRecording = false
                     self.isStoppingRecording = false
+                    self.clearIsolatedSource()
                     self.onStateChange?(false)
                     if let url {
+                        self.transition(to: .editing)
                         self.presentSave(tempURL: url)
                     } else {
                         self.isFinalizingRecording = false
+                        self.transition(to: .idle)
                         self.presentError(ScreenCaptureError.recordingFailed)
                     }
                 }
             }
         }
+    }
+
+    private func clearIsolatedSource() {
+        sourceSession?.invalidate()
+        sourceSession = nil
+        isolatedSourceFrame = nil
+        isolatedGeometry = nil
+        sourceRevision = nil
+        selectedWindowID = nil
+        selectedProcessID = nil
+        selectedCaptureDisplayBounds = nil
+        onIsolatedSourceChanged?(nil, nil, isolatedGeneration)
     }
 
     private func captureFallbackFrame(display: DisplayDescriptor, sourceRect: CGRect?) async throws -> CGImage {
@@ -1081,10 +1435,12 @@ final class RecordingController {
             if editedURL != tempURL {
                 try? FileManager.default.removeItem(at: tempURL)
             }
+            self?.transition(to: .saving)
             self?.savePanel(for: editedURL)
         }, onCancel: { [weak self] in
             self?.clipEditor = nil
             self?.isFinalizingRecording = false
+            self?.transition(to: .idle)
             try? FileManager.default.removeItem(at: tempURL)
         })
     }
@@ -1095,19 +1451,29 @@ final class RecordingController {
         panel.allowedContentTypes = [.mpeg4Movie]
         panel.canCreateDirectories = true
         NSApp.activate(ignoringOtherApps: true)
-
-        if panel.runModal() == .OK, let destination = panel.url {
-            try? FileManager.default.removeItem(at: destination)
+        while true {
+            guard panel.runModal() == .OK, let destination = panel.url else {
+                try? FileManager.default.removeItem(at: tempURL)
+                break
+            }
             do {
-                try FileManager.default.moveItem(at: tempURL, to: destination)
+                if destination != tempURL {
+                    try? FileManager.default.removeItem(at: destination)
+                    try FileManager.default.moveItem(at: tempURL, to: destination)
+                }
+                break
             } catch {
                 let alert = NSAlert(error: error)
-                alert.runModal()
+                alert.addButton(withTitle: "Choose Another Location")
+                alert.addButton(withTitle: "Discard Recording")
+                if alert.runModal() == .alertSecondButtonReturn {
+                    try? FileManager.default.removeItem(at: tempURL)
+                    break
+                }
             }
-        } else {
-            try? FileManager.default.removeItem(at: tempURL)
         }
         isFinalizingRecording = false
+        transition(to: .idle)
     }
 
     private func suggestedFilename() -> String {
@@ -1228,6 +1594,11 @@ final class RecordingController {
     }
 
     private func cleanup() {
+        frameTimer?.invalidate()
+        frameTimer = nil
+        pickerController?.finish()
+        pickerController = nil
+        clearIsolatedSource()
         captureSession?.stopRunning()
         captureSession = nil
         micOutput = nil

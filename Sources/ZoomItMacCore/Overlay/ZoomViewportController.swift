@@ -6,13 +6,15 @@ final class ZoomViewportController {
     private(set) var targetZoomFactor: CGFloat = 2
     private var telescopeStep: CGFloat = 0
     private(set) var capturedFrame: CapturedFrame?
+    private(set) var contentGeometry: RecordingCanvasGeometry?
 
     // Matches ZoomIt's ZOOM_LEVEL_STEP_IN / ZOOM_LEVEL_STEP_OUT telescope factors.
     private static let stepIn: CGFloat = 1.1
     private static let stepOut: CGFloat = 0.8
 
-    func configure(for frame: CapturedFrame, initialZoom: CGFloat) {
+    func configure(for frame: CapturedFrame, initialZoom: CGFloat, contentGeometry: RecordingCanvasGeometry? = nil) {
         capturedFrame = frame
+        self.contentGeometry = contentGeometry
         targetZoomFactor = Self.clampZoom(initialZoom)
         zoomFactor = targetZoomFactor
         telescopeStep = 0
@@ -70,12 +72,18 @@ final class ZoomViewportController {
     func sourceRect(for destinationBounds: CGRect, cursorLocation: CGPoint?) -> CGRect {
         guard let frame = capturedFrame else { return destinationBounds }
 
-        let width = destinationBounds.width
-        let height = destinationBounds.height
+        let width = contentGeometry?.logicalSize.width ?? destinationBounds.width
+        let height = contentGeometry?.logicalSize.height ?? destinationBounds.height
         let sourceWidth = width / zoomFactor
         let sourceHeight = height / zoomFactor
         let localCursor = cursorLocation.map { point in
-            CGPoint(x: point.x - frame.display.frame.minX, y: frame.display.frame.maxY - point.y)
+            if let geometry = contentGeometry {
+                let view = geometry.viewPoint(forGlobalPoint: point)
+                let fit = RecordingCanvasGeometry.aspectFitRect(for: geometry.logicalSize, in: destinationBounds)
+                return CGPoint(x: min(max((view.x - fit.minX) / fit.width * width, 0), width),
+                               y: min(max((view.y - fit.minY) / fit.height * height, 0), height))
+            }
+            return CGPoint(x: point.x - frame.display.frame.minX, y: frame.display.frame.maxY - point.y)
         } ?? CGPoint(x: width / 2, y: height / 2)
 
         // Position the zoom box so the content under the cursor stays anchored
@@ -101,6 +109,9 @@ final class ZoomViewportController {
 
     func contentPoint(for viewPoint: CGPoint, destinationBounds: CGRect, cursorLocation: CGPoint?) -> CGPoint {
         let source = sourceRect(for: destinationBounds, cursorLocation: cursorLocation)
+        if let geometry = contentGeometry {
+            return viewPoint.applying(geometry.contentToViewTransform(viewBounds: destinationBounds, viewport: source).inverted())
+        }
         return CGPoint(
             x: source.minX + (viewPoint.x / destinationBounds.width) * source.width,
             y: source.minY + (viewPoint.y / destinationBounds.height) * source.height
@@ -108,6 +119,9 @@ final class ZoomViewportController {
     }
 
     func contentToDestinationTransform(source: CGRect, destinationBounds: CGRect) -> CGAffineTransform {
+        if let geometry = contentGeometry {
+            return geometry.contentToViewTransform(viewBounds: destinationBounds, viewport: source)
+        }
         let scaleX = destinationBounds.width / source.width
         let scaleY = destinationBounds.height / source.height
 

@@ -17,7 +17,8 @@ enum AppCommand: Equatable {
     case snipRegion(save: Bool)
     case snipOcr
     case startPanorama(save: Bool)
-    case toggleRecording(region: Bool)
+    case toggleRecording(scope: RecordingScope)
+    case stopRecording
     #if !ZOOMIT_APP_STORE
     case startDemoType
     case resetDemoType

@@ -68,9 +68,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         statusItem = makeStatusItem(controller: appController!)
-        modeCoordinator.onRecordingStateChanged = { [weak self] recording in
-            self?.updateRecordingIndicator(recording)
+        modeCoordinator.onRecordingSessionStateChanged = { [weak self] state in
+            self?.updateRecordingMenu(state)
         }
+        updateRecordingMenu(modeCoordinator.recordingSessionState)
         hotkeyService.start()
 
         // On a fresh install, open Settings so the user has a clear entry point
@@ -102,6 +103,36 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func updateRecordingMenu(_ state: RecordingSessionState) {
+        updateRecordingIndicator(state.isRecording || state.phase == .stopping)
+        let status: String
+        switch state.phase {
+        case .idle: status = "Ready to record"
+        case .selecting: status = "Choose a recording target…"
+        case .starting: status = "Starting recording…"
+        case .recording:
+            let name = state.scope?.displayName ?? "Screen"
+            status = state.availability == .available ? "Recording \(name)" : "Recording \(name) — target unavailable; recording blank content"
+        case .stopping: status = "Finishing recording…"
+        case .editing: status = "Editing recording"
+        case .saving: status = "Saving recording…"
+        }
+        statusItem?.button?.toolTip = status
+        statusItem?.button?.setAccessibilityIdentifier("recording.statusIndicator")
+        statusItem?.button?.setAccessibilityLabel("ZoomIt: \(status)")
+        guard let menu = statusItem?.menu else { return }
+        for item in menu.items {
+            switch item.action {
+            case #selector(AppController.toggleRecording), #selector(AppController.toggleRecordingRegion),
+                 #selector(AppController.toggleRecordingWindow), #selector(AppController.toggleRecordingApplication):
+                item.isEnabled = state.canStart
+            case #selector(AppController.stopRecording): item.isEnabled = state.canStop
+            default: break
+            }
+            if item.identifier?.rawValue == "recording.status" { item.title = status }
+        }
+    }
+
     private func makeStatusItem(controller: AppController) -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         // Intentionally no autosaveName: persisting an absolute menu-bar slot makes
@@ -121,11 +152,26 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
+        menu.autoenablesItems = false
         for entry in Self.statusMenuEntries() {
             if entry.isSeparator {
                 menu.addItem(.separator())
             } else {
-                menu.addItem(NSMenuItem(title: entry.title, action: entry.action, keyEquivalent: entry.keyEquivalent))
+                let menuItem = NSMenuItem(title: entry.title, action: entry.action, keyEquivalent: entry.keyEquivalent)
+                let identifier: String?
+                switch entry.action {
+                case #selector(AppController.toggleRecording): identifier = "recording.recordScreen"
+                case #selector(AppController.toggleRecordingRegion): identifier = "recording.recordRegion"
+                case #selector(AppController.toggleRecordingWindow): identifier = "recording.recordWindow"
+                case #selector(AppController.toggleRecordingApplication): identifier = "recording.recordApplication"
+                case #selector(AppController.stopRecording): identifier = "recording.stop"
+                default: identifier = nil
+                }
+                if let identifier {
+                    menuItem.identifier = NSUserInterfaceItemIdentifier(identifier)
+                    menuItem.setAccessibilityIdentifier(identifier)
+                }
+                menu.addItem(menuItem)
             }
         }
 
@@ -133,6 +179,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             item.target = controller
         }
 
+        let recordingStatus = NSMenuItem(title: "Ready to record", action: nil, keyEquivalent: "")
+        recordingStatus.identifier = NSUserInterfaceItemIdentifier("recording.status")
+        recordingStatus.setAccessibilityIdentifier("recording.status")
+        recordingStatus.isEnabled = false
+        if let index = menu.items.firstIndex(where: { $0.action == #selector(AppController.toggleRecording) }) {
+            menu.insertItem(recordingStatus, at: index)
+        }
         item.menu = menu
         return item
     }
@@ -166,6 +219,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             StatusMenuEntry(title: "Static Zoom", action: #selector(AppController.activateStaticZoom), keyEquivalent: ""),
             StatusMenuEntry(title: "Live Zoom", action: #selector(AppController.activateLiveZoom), keyEquivalent: ""),
             StatusMenuEntry(title: "Record Screen", action: #selector(AppController.toggleRecording), keyEquivalent: ""),
+            StatusMenuEntry(title: "Record Region…", action: #selector(AppController.toggleRecordingRegion), keyEquivalent: ""),
+            StatusMenuEntry(title: "Record Window…", action: #selector(AppController.toggleRecordingWindow), keyEquivalent: ""),
+            StatusMenuEntry(title: "Record Application…", action: #selector(AppController.toggleRecordingApplication), keyEquivalent: ""),
+            StatusMenuEntry(title: "Stop Recording", action: #selector(AppController.stopRecording), keyEquivalent: ""),
             StatusMenuEntry(title: "Panorama Capture", action: #selector(AppController.startPanorama), keyEquivalent: ""),
             StatusMenuEntry(title: "DemoMirror", action: #selector(AppController.toggleDemoMirror), keyEquivalent: ""),
             StatusMenuEntry(title: "Break Timer", action: #selector(AppController.toggleBreakTimer), keyEquivalent: ""),

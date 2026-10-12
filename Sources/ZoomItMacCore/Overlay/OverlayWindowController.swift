@@ -30,6 +30,10 @@ final class OverlayWindowController {
         annotationController: AnnotationController,
         smoothImage: Bool,
         excludeFromScreenCapture: Bool = false,
+        contentGeometry: RecordingCanvasGeometry? = nil,
+        generation: UInt64 = 0,
+        activeContentRect: CGRect? = nil,
+        sourceAvailable: Bool = true,
         commandSink: @escaping (AppCommand) -> Void
     ) {
         close()
@@ -46,7 +50,7 @@ final class OverlayWindowController {
         window.isOpaque = true
         window.acceptsMouseMovedEvents = true
         window.isReleasedWhenClosed = false
-        if excludeFromScreenCapture {
+        if excludeFromScreenCapture || contentGeometry != nil {
             // Live zoom captures the screen live and displays it in this overlay.
             // Marking the window as non-shareable keeps ScreenCaptureKit from
             // capturing the overlay back into itself, which would otherwise feed
@@ -64,9 +68,20 @@ final class OverlayWindowController {
             viewportController: viewportController,
             annotationController: annotationController,
             smoothImage: smoothImage,
+            contentGeometry: contentGeometry,
+            generation: generation,
+            activeContentRect: activeContentRect,
+            sourceAvailable: sourceAvailable,
             userSelectedResourceAccess: userSelectedResourceAccess,
             commandSink: commandSink
         )
+        if contentGeometry != nil {
+            window.setAccessibilityIdentifier("recording.isolatedOverlay")
+            canvasView.setAccessibilityIdentifier("recording.isolatedCanvas")
+            canvasView.setAccessibilityElement(true)
+            canvasView.setAccessibilityRole(.image)
+            canvasView.setAccessibilityLabel("Isolated recording canvas")
+        }
         window.contentView = canvasView
         window.makeKeyAndOrderFront(nil)
         // Activate the app so NSCursor.hide() takes effect immediately; as a
@@ -150,6 +165,19 @@ final class OverlayWindowController {
     /// zoom/drawing even when ScreenCaptureKit omits our own windows.
     func captureFrameForRecording(sourceRect: CGRect?) -> CGImage? {
         canvasView?.captureRecordingImage(sourceRect: sourceRect)
+    }
+
+    var visibleIsolatedCanvasGeneration: UInt64? {
+        guard window?.isVisible == true else { return nil }
+        return canvasView?.isolatedCanvasGeneration
+    }
+
+    func recordingOverlaySnapshot() -> RecordingOverlaySnapshot? {
+        canvasView?.recordingOverlaySnapshot()
+    }
+
+    func updateIsolatedSource(image: CGImage, activeContentRect: CGRect?, available: Bool, generation: UInt64) {
+        canvasView?.updateIsolatedSource(image: image, activeContentRect: activeContentRect, available: available, generation: generation)
     }
 
     func requestRedraw() {
