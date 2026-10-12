@@ -54,6 +54,51 @@ struct RecordingTestEnvironment {
         return XCUIApplication(url: url)
     }
     func recorder() -> XCUIApplication { XCUIApplication(url: recorderURL) }
+
+    static func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+    static func status(in recorder: XCUIApplication) -> String {
+        element("recording.statusIndicator", in: recorder).label
+    }
+    static func menuAction(_ identifier: String, in recorder: XCUIApplication) throws {
+        let indicator = element("recording.statusIndicator", in: recorder)
+        guard indicator.waitForExistence(timeout: 10) else { throw HarnessError("Recorder's menu bar indicator is unavailable; allow Accessibility and ensure the menu bar is visible. \(recorder.debugDescription)") }
+        indicator.click()
+        let item = recorder.menuItems[identifier]
+        guard item.waitForExistence(timeout: 5), item.isEnabled else {
+            recorder.typeKey(.escape, modifierFlags: [])
+            throw HarnessError("Recorder menu action \(identifier) is unavailable. \(recorder.debugDescription)")
+        }
+        item.click()
+    }
+    static func configureRecorder(_ recorder: XCUIApplication, systemAudio: Bool = false) throws {
+        let title = "ZoomIt - Sysinternals: www.sysinternals.com"
+        if !recorder.windows[title].exists {
+            let indicator = element("recording.statusIndicator", in: recorder)
+            guard indicator.waitForExistence(timeout: 10) else { throw HarnessError("Recorder did not expose its status item") }
+            indicator.click()
+            let settings = recorder.menuItems["Settings…"]
+            guard settings.waitForExistence(timeout: 5) else { throw HarnessError("Settings menu inaccessible: \(recorder.debugDescription)") }
+            settings.click()
+        }
+        let settingsWindow = recorder.windows[title]
+        guard settingsWindow.waitForExistence(timeout: 8) else { throw HarnessError("Recorder Settings did not open") }
+        let recordPane = settingsWindow.staticTexts["Record"].firstMatch
+        guard recordPane.waitForExistence(timeout: 5) else { throw HarnessError("Record Settings sidebar missing: \(settingsWindow.debugDescription)") }
+        recordPane.click()
+        for (identifier, enabled) in [("settings.record.systemAudio", systemAudio), ("settings.record.microphone", false), ("settings.record.webcamEnabled", false)] {
+            let checkbox = element(identifier, in: recorder)
+            guard checkbox.waitForExistence(timeout: 5), checkbox.isEnabled,
+                  let value = checkbox.value as? String, ["0", "1"].contains(value) else {
+                throw HarnessError("Cannot configure \(identifier) through actual Settings. \(settingsWindow.debugDescription)")
+            }
+            if (value == "1") != enabled { checkbox.click() }
+            guard checkbox.value as? String == (enabled ? "1" : "0") else { throw HarnessError("Settings did not accept \(identifier)=\(enabled)") }
+        }
+        settingsWindow.buttons[XCUIIdentifierCloseWindow].click()
+        try wait(description: "Settings closed and global shortcuts restored") { !settingsWindow.exists }
+    }
     func launch(_ app: XCUIApplication, arguments: [String] = []) {
         app.launchEnvironment["ZOOMIT_UI_ARTIFACTS"] = artifacts.path
         app.launchArguments = arguments

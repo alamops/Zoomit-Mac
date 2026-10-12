@@ -314,3 +314,11 @@ There is no owner-deferred remainder.
 - Wave 1 follow-up: final compatibility-test edit exposed an explicit-self closure compile error after the initial checkpoint. Corrected it and confirmed `build-for-testing` succeeds before advancing.
 
 - Wave 2 completed: I3 capture_backend, I4 isolated_overlay, I5 foundation. Both standard and App Store builds passed after final visibility and overlay-allocation changes. Root completed the small remaining removal of the temporary Boolean API and forced authorized-target visibility refresh before final-frame rendering. Native UI suites remain unexecuted.
+
+- Wave 3 completed: I6 recording_tests and I7 root documentation. Standard/AppStore builds and native XCTest build-for-testing passed. The test code includes real MP4 writer/decoder checks and 14 native recording flows; suites remain unexecuted. Deterministic no-first-frame verification uses the actual writer because OS first-frame timing cannot be guaranteed without a capture bypass. Editor timeline accessibility element/role/value wiring is included for authorized native trim automation.
+
+### Completion wave 4 — native content footprint
+
+The native stream's fixed IOSurface dimensions do not identify the changing target footprint after resize. Preserve per-frame contentRect/contentScale/scaleFactor metadata, project the actual pixel footprint into the logical canvas, use it for hit testing, and clip annotations/cursor to that footprint. This finishes the approved padding requirement; it does not change target-selection scope.
+
+Root owns this serialized completion task's files: `Sources/ZoomItMacCore/Capture/RecordingFrameRenderer.swift`, `Sources/ZoomItMacCore/Capture/RecordingSourceSession.swift`, `Sources/ZoomItMacCore/Core/ModeCoordinator.swift`, `Sources/ZoomItMacCore/Overlay/ZoomCanvasRenderer.swift`, `Sources/ZoomItMacCore/Overlay/ZoomCanvasView.swift`, `Sources/ZoomItMacCore/SelfTest/RecordingOverlaySelfTests.swift`, `Tests/RecordingUI/PickerProbeApp.swift`, and the plan/testing documents. The existing initializer defaults remain compatible with the completed test code. Add deterministic footprint and annotation-clipping regressions and retain native frame metadata in probe diagnostics. No other task edits these files concurrently.

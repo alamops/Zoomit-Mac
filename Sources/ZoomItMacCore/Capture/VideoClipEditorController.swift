@@ -120,6 +120,7 @@ final class VideoClipEditorController: NSObject, NSWindowDelegate, VideoTimeline
         )
         win.editorController = self
         win.title = "ZoomIt: Edit Recording"
+        win.setAccessibilityIdentifier("recording.editor")
         win.delegate = self
         win.center()
         win.isReleasedWhenClosed = false
@@ -141,24 +142,43 @@ final class VideoClipEditorController: NSObject, NSWindowDelegate, VideoTimeline
         content.addSubview(playerView)
 
         timeline = VideoTimelineView()
+        timeline.setAccessibilityIdentifier("recording.editor.timeline")
+        timeline.setAccessibilityElement(true)
+        timeline.setAccessibilityRole(.group)
+        timeline.setAccessibilityLabel("Recording trim timeline")
         timeline.delegate = self
         timeline.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(timeline)
 
         positionLabel = NSTextField(labelWithString: "0:00.00")
+        positionLabel.setAccessibilityIdentifier("recording.editor.position")
         positionLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         positionLabel.textColor = .secondaryLabelColor
 
         let skipStart = transportButton("backward.end.fill", #selector(skipStart))
+        skipStart.setAccessibilityIdentifier("recording.editor.skipStart")
+        skipStart.setAccessibilityLabel("Go to recording start")
         let back = transportButton("backward.fill", #selector(stepBack))
+        back.setAccessibilityIdentifier("recording.editor.stepBack")
+        back.setAccessibilityLabel("Step backward")
         playButton = transportButton("play.fill", #selector(togglePlay))
+        playButton.setAccessibilityIdentifier("recording.editor.play")
+        playButton.setAccessibilityLabel("Play or pause recording")
         let forward = transportButton("forward.fill", #selector(stepForward))
+        forward.setAccessibilityIdentifier("recording.editor.stepForward")
+        forward.setAccessibilityLabel("Step forward")
         let skipEnd = transportButton("forward.end.fill", #selector(skipEnd))
+        skipEnd.setAccessibilityIdentifier("recording.editor.skipEnd")
+        skipEnd.setAccessibilityLabel("Go to recording end")
 
         volumeButton = transportButton("speaker.wave.2.fill", #selector(toggleMute))
         volumeButton.contentTintColor = .secondaryLabelColor
         volumeButton.toolTip = "Mute"
+        volumeButton.setAccessibilityIdentifier("recording.editor.mute")
+        volumeButton.setAccessibilityLabel("Mute recording preview")
         volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: self, action: #selector(volumeChanged))
+        volumeSlider.setAccessibilityIdentifier("recording.editor.volume")
+        volumeSlider.setAccessibilityLabel("Recording preview volume")
         volumeSlider.widthAnchor.constraint(equalToConstant: 80).isActive = true
 
         // Centered transport controls; time on the left, volume on the right.
@@ -180,8 +200,10 @@ final class VideoClipEditorController: NSObject, NSWindowDelegate, VideoTimeline
 
         let append = NSButton(title: "Append…", target: self, action: #selector(appendClip))
         append.bezelStyle = .rounded
+        append.setAccessibilityIdentifier("recording.editor.append")
         deleteButton = NSButton(title: "Delete Region", target: self, action: #selector(commitPendingDelete))
         deleteButton.bezelStyle = .rounded
+        deleteButton.setAccessibilityIdentifier("recording.editor.deleteRegion")
         deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: nil)
         deleteButton.imagePosition = .imageLeading
         deleteButton.contentTintColor = .systemRed
@@ -190,14 +212,17 @@ final class VideoClipEditorController: NSObject, NSWindowDelegate, VideoTimeline
         let transitionLabel = NSTextField(labelWithString: "Transition:")
         transitionLabel.textColor = .secondaryLabelColor
         transitionPopup = NSPopUpButton()
+        transitionPopup.setAccessibilityIdentifier("recording.editor.transition")
         transitionPopup.addItems(withTitles: Transition.allCases.map(\.title))
         transitionPopup.selectItem(at: Transition.allCases.firstIndex(of: selectedTransition) ?? 0)
         transitionPopup.target = self
         transitionPopup.action = #selector(transitionChanged)
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         cancel.bezelStyle = .rounded
+        cancel.setAccessibilityIdentifier("recording.editor.cancel")
         let save = NSButton(title: "Save…", target: self, action: #selector(save))
         save.bezelStyle = .rounded
+        save.setAccessibilityIdentifier("recording.editor.save")
         save.keyEquivalent = "\r"
         let transitionControls = NSStackView(views: [transitionLabel, transitionPopup])
         transitionControls.spacing = 6
@@ -301,6 +326,7 @@ final class VideoClipEditorController: NSObject, NSWindowDelegate, VideoTimeline
         timeline.duration = duration
         timeline.trimStart = trimStart
         timeline.trimEnd = trimEnd
+        timeline.setAccessibilityValue("Trim start \(trimStart), end \(trimEnd), duration \(duration) seconds")
         var bound = 0.0; var appendMarks: [Double] = []; var deleteMarks: [Double] = []
         for index in 0..<max(0, segments.count - 1) {
             bound += segments[index].durationSeconds
@@ -368,7 +394,10 @@ final class VideoClipEditorController: NSObject, NSWindowDelegate, VideoTimeline
 
     // MARK: - Timeline delegate
 
-    func timelineDidChangeSelection(start: Double, end: Double) { trimStart = start; trimEnd = end }
+    func timelineDidChangeSelection(start: Double, end: Double) {
+        trimStart = start; trimEnd = end
+        timeline.setAccessibilityValue("Trim start \(trimStart), end \(trimEnd), duration \(duration) seconds")
+    }
     func timelineDidScrub(to position: Double, scrubbing: Bool) { pause(); seek(position) }
     func timelineDidChangePendingDelete(start: Double, end: Double) {
         pendingDeleteStart = start

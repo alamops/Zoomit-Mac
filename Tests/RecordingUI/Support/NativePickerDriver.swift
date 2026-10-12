@@ -8,12 +8,16 @@ final class NativePickerDriver {
     private let systemApps = [
         XCUIApplication(bundleIdentifier: "com.apple.controlcenter"),
         XCUIApplication(bundleIdentifier: "com.apple.screencaptureui"),
-        XCUIApplication(bundleIdentifier: "com.apple.WindowManager")
+        XCUIApplication(bundleIdentifier: "com.apple.WindowManager"),
+        XCUIApplication(bundleIdentifier: "com.apple.systemuiserver")
     ]
+    private var requestingApps: [XCUIApplication] = []
     init(test: XCTestCase) { self.test = test }
+    func include(_ app: XCUIApplication) { requestingApps.append(app) }
 
     func select(scope: Scope, targetApp: XCUIApplication, windowTitle: String,
                 applicationName: String = "Recording Fixture A") throws {
+        include(targetApp)
         let target = targetApp.windows[windowTitle]
         guard target.waitForExistence(timeout: 8) else { throw HarnessError("Missing fixture target \(windowTitle)") }
         let modeLabels = scope == .window ? ["Window", "Windows"] : ["Application", "Applications", "App"]
@@ -37,16 +41,33 @@ final class NativePickerDriver {
         }
     }
     func cancel(from requestingApp: XCUIApplication) {
+        include(requestingApp)
         if !clickSystemElement(labels: ["Cancel", "Stop Selecting", "Close"], types: [.button]) {
             requestingApp.typeKey(.escape, modifierFlags: [])
         }
     }
-    @discardableResult private func clickSystemElement(labels: [String], types: [XCUIElement.ElementType]) -> Bool {
-        guard let element = findSystemElement(labels: labels, types: types) else { return false }
+    func withdrawSharing() throws {
+        let candidates = ["Screen Sharing", "Screen Recording", "Sharing", "Recording"]
+        _ = clickSystemElement(labels: candidates, types: [.menuBarItem, .button, .statusItem], systemOnly: true)
+        do {
+            try RecordingTestEnvironment.wait(timeout: 8, description: "system Stop Sharing control") {
+                self.findSystemElement(labels: ["Stop Sharing", "Stop Recording", "Stop"], types: [.button, .menuItem], systemOnly: true) != nil
+            }
+            guard clickSystemElement(labels: ["Stop Sharing", "Stop Recording", "Stop"], types: [.button, .menuItem], systemOnly: true) else {
+                throw HarnessError("OS withdrawal control disappeared")
+            }
+        } catch {
+            attachDiagnostics("system-withdrawal-failed")
+            throw HarnessError("Cannot withdraw source sharing through Apple's UI on this OS: \(error)")
+        }
+    }
+    @discardableResult private func clickSystemElement(labels: [String], types: [XCUIElement.ElementType], systemOnly: Bool = false) -> Bool {
+        guard let element = findSystemElement(labels: labels, types: types, systemOnly: systemOnly) else { return false }
         element.click(); return true
     }
-    private func findSystemElement(labels: [String], types: [XCUIElement.ElementType]) -> XCUIElement? {
-        for app in systemApps where app.state != .notRunning {
+    private func findSystemElement(labels: [String], types: [XCUIElement.ElementType], systemOnly: Bool = false) -> XCUIElement? {
+        let applications = systemOnly ? systemApps : systemApps + requestingApps
+        for app in applications where app.state != .notRunning {
             for type in types {
                 let descendants = app.descendants(matching: type)
                 for label in labels {
@@ -60,7 +81,7 @@ final class NativePickerDriver {
     func attachDiagnostics(_ name: String) {
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = "\(name)-desktop"; screenshot.lifetime = .keepAlways; test.add(screenshot)
-        for app in systemApps where app.state != .notRunning {
+        for app in systemApps + requestingApps where app.state != .notRunning {
             let tree = XCTAttachment(string: app.debugDescription)
             tree.name = "\(name)-\(app.label)-tree"; tree.lifetime = .keepAlways; test.add(tree)
         }

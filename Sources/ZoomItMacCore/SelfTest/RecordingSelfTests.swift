@@ -158,12 +158,12 @@ enum RecordingSelfTests {
         try expect(try rgb(zoomed, x: 40, y: 40) == rgb(image, x: 40, y: 40), "camera must retain fixed position and size after source zoom")
     }
 
-    private static func canvas(_ width: CGFloat, _ height: CGFloat) throws -> RecordingCanvasGeometry {
+    static func canvas(_ width: CGFloat, _ height: CGFloat) throws -> RecordingCanvasGeometry {
         try RecordingCanvasGeometry(logicalSize: CGSize(width: width, height: height), pixelScale: 1,
                                     hostDisplayFrame: CGRect(x: 0, y: 0, width: width, height: height))
     }
 
-    private static func pixelImage(width: Int, height: Int, color: (Int, Int) -> (UInt8, UInt8, UInt8)) throws -> CGImage {
+    static func pixelImage(width: Int, height: Int, color: (Int, Int) -> (UInt8, UInt8, UInt8)) throws -> CGImage {
         var bytes = [UInt8]()
         for y in 0..<height {
             for x in 0..<width {
@@ -191,7 +191,7 @@ enum RecordingSelfTests {
         return image
     }
 
-    private static func rgb(_ image: CGImage, x: Int, y: Int) throws -> [UInt8] {
+    static func rgb(_ image: CGImage, x: Int, y: Int) throws -> [UInt8] {
         guard let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { throw SelfTestError.failure("Recording: image has no pixel storage") }
         let offset = y * image.bytesPerRow + x * 4
         return [bytes[offset], bytes[offset + 1], bytes[offset + 2]]
