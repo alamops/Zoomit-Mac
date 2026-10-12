@@ -4,7 +4,7 @@ This feature adds native target selection, isolated zoom/drawing/webcam composit
 
 ## Verification status
 
-The execute-plan run implements application code, deterministic self-tests, native XCTest UI tests, fixtures, and assertion helpers. Compile checks are separate from executing the tests. Standard and App Store app builds have passed; the final test-code compile result is recorded in the plan execution log.
+The execute-plan run implements application code, deterministic self-tests, native XCTest UI tests, fixtures, and assertion helpers. Compile checks are separate from executing the tests. Standard and App Store app builds and both XCTest schemes’ build-for-testing checks passed. The development app bundle was built and its signature verified. Checkpoint details are recorded in the plan execution log.
 
 **Runtime suites have not been executed by this coding run.** Native picker accessibility, picker-only authorization, source status delivery on macOS 14, two-display behavior, device permissions, and exported-video/audio assertions remain runtime acceptance gates. A compiled test is not evidence that its scenario passed.
 
@@ -60,7 +60,7 @@ This compile-only command does not launch the picker or prove runtime permission
 - Normal capture tests and picker-only authorization tests have different permission prerequisites. Do not reset an installed official ZoomIt's grants to prepare a test.
 - Two-display acceptance requires a second real or supported virtual display. The suite reports missing display prerequisites as failures with pending-environment evidence; it does not turn required cases into passing skips.
 - Real microphone/webcam checks need configured devices. Deterministic composition tests can use known webcam pixels without a camera, and fixture audio does not need a microphone.
-- Avoid another app/session consuming the same global shortcuts. UI tests are serial and the wrapper holds a run lock. Remove a stale `.build/recording-ui/run.lock` only after confirming no test run is active.
+- Quit other ZoomIt/ZoomIt (Dev) instances before native tests. The existing single-instance lock or global shortcuts can block the dedicated recorder; preflight reports this instead of terminating your app. Avoid another app/session consuming the same shortcuts. UI tests are serial and the wrapper holds a run lock. Remove a stale `.build/recording-ui/run.lock` only after confirming no test run is active.
 
 The wrapper builds the recorder through the existing app-build script using dedicated identities:
 
@@ -79,6 +79,8 @@ The recorder is launched by its validated absolute bundle URL. Fixture and probe
 Fixture A provides a green primary window, a cyan second window, an orange dialog, source animation, and a deterministic tone. Fixture B provides forbidden content and a different tone. Buttons expose lifecycle and geometry changes through public accessibility controls. These apps make same-app versus other-app capture differences observable.
 
 The probe records native status/filter/pixel evidence to `probe-evidence.json` and snapshots to `probe-latest.png`. Newer filter identity metadata is inspected only behind its availability check. On macOS 14 the authorized filter remains opaque; the capture result and native status sequence must establish behavior without guessing an identity from a title or rectangle.
+
+Each probe frame also retains native contentRect/contentScale/scaleFactor and buffer dimensions. Those values identify the changing target footprint inside a fixed-size surface, so input and annotations can exclude letterbox padding after resize. The conversion and clipping have deterministic regression coverage; their OS-specific alignment is also part of native resize acceptance. Apple's [capture sample](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos) describes obtaining this per-frame metadata.
 
 Recording assertions read exported MP4s and check:
 

@@ -32,6 +32,12 @@ struct RecordingTestEnvironment {
             throw HarnessError("The supplied app must be the dedicated \(distribution) recording-test bundle (\(expectedID)). Refusing to launch an installed official app.")
         }
         if distribution == "appstore" { try verifySandbox() }
+        let existingZoomIt = NSWorkspace.shared.runningApplications.filter {
+            ["com.sysinternals.zoomitmac", "com.sysinternals.zoomitmac.dev"].contains($0.bundleIdentifier ?? "")
+        }
+        guard existingZoomIt.isEmpty else {
+            throw HarnessError("Quit the currently running ZoomIt/ZoomIt (Dev) before native recording tests. Its single-instance lock or global shortcuts can block the dedicated recorder. The harness will not terminate your app.")
+        }
     }
     private func verifySandbox() throws {
         let command = Process(); let pipe = Pipe()

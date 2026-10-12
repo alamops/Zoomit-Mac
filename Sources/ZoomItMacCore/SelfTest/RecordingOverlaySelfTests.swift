@@ -1,8 +1,10 @@
 import AppKit
+@preconcurrency import ScreenCaptureKit
 
 @MainActor
 enum RecordingOverlaySelfTests {
     static func run() throws {
+        try nativeFootprintAndClipping()
         let geometry = try RecordingCanvasGeometry(logicalSize: CGSize(width: 64, height: 32), pixelScale: 2,
                                                    hostDisplayFrame: CGRect(x: -1000, y: 200, width: 600, height: 600))
         let green = try RecordingSelfTests.pixelImage(width: 128, height: 64) { _, _ in (0, 255, 0) }
@@ -32,6 +34,7 @@ enum RecordingOverlaySelfTests {
                                     userSelectedResourceAccess: UserDefaultsUserSelectedResourceAccess(defaults: preferences), commandSink: { _ in })
         defer { canvas.prepareForClose() }
         let first = try snapshot(canvas)
+        try require(first.activeContentRect == geometry.logicalBounds, "canvas exports its actual target footprint")
         try require(first.frozenImage === green, "static overlay freezes only authorized source")
         canvas.updateIsolatedSource(image: blue, activeContentRect: geometry.logicalBounds, available: true, generation: 42)
         try require(try snapshot(canvas).frozenImage === green, "static zoom retains frozen source while native frames change")
@@ -75,6 +78,47 @@ enum RecordingOverlaySelfTests {
                     "legacy screen overlay never exports an isolated snapshot")
         let legacy = ordinaryViewport.sourceRect(for: geometry.presentationBounds, cursorLocation: nil)
         try require(legacy.size == CGSize(width: 300, height: 300), "ordinary zoom retains display geometry")
+    }
+
+    private static func nativeFootprintAndClipping() throws {
+        let geometry = try RecordingCanvasGeometry(logicalSize: CGSize(width: 64, height: 64), pixelScale: 2,
+                                                   hostDisplayFrame: CGRect(x: 0, y: 0, width: 128, height: 128))
+        let metadata: [SCStreamFrameInfo: Any] = [
+            .contentRect: CGRect(x: 16, y: 0, width: 32, height: 64).dictionaryRepresentation,
+            .contentScale: CGFloat(0.5), .scaleFactor: CGFloat(4)
+        ]
+        let pixels = RecordingSourceSession.pixelContentRect(attachments: metadata, pixelSize: CGSize(width: 128, height: 128))
+        try require(pixels == CGRect(x: 32, y: 0, width: 64, height: 128), "native scale metadata maps content into buffer pixels")
+        let black = try RecordingSelfTests.pixelImage(width: 128, height: 128) { _, _ in (0, 0, 0) }
+        let slot = RecordingSourceSession(generation: 1, audioSink: { _ in })
+        slot.consume(.complete, image: black, contentRect: pixels)
+        let frame = slot.snapshot().frame
+        try require(frame.contentRect == pixels, "source publication preserves changing content footprint")
+        guard let footprint = RecordingFrameRenderer.logicalContentRect(source: frame, geometry: geometry, generation: 1) else {
+            throw SelfTestError.failure("Native target footprint was not mapped")
+        }
+        try require(footprint == CGRect(x: 16, y: 0, width: 32, height: 64), "fixed-size surface does not imply full target coverage")
+        try require(geometry.contentPoint(forViewPoint: CGPoint(x: 8, y: 64), viewBounds: geometry.presentationBounds,
+                                          activeContentRect: footprint) == nil, "inner native letterbox padding rejects drawing input")
+        let stroke = Annotation(tool: .line, points: [CGPoint(x: 0, y: 32), CGPoint(x: 64, y: 32)],
+                                style: AnnotationStyle(color: .red, rootWidth: 8, alpha: 1))
+        let overlay = RecordingOverlaySnapshot(generation: 1, viewport: geometry.logicalBounds, annotations: [stroke],
+            caret: RecordingCaretSnapshot(origin: CGPoint(x: 4, y: 18), height: 6, color: .red),
+            cursor: RecordingCursorSnapshot(point: CGPoint(x: 4, y: 32), rootWidth: 8, color: .red), activeContentRect: footprint)
+        guard let rendered = RecordingFrameRenderer.render(source: frame, overlay: overlay, geometry: geometry, generation: 1) else {
+            throw SelfTestError.failure("Footprint renderer failed")
+        }
+        try require(try RecordingSelfTests.rgb(rendered, x: 8, y: 64) == [0, 0, 0], "annotation and cursor cannot paint target padding")
+        try require(try RecordingSelfTests.rgb(rendered, x: 8, y: 40) == [0, 0, 0], "typing caret cannot paint target padding")
+        let center = try RecordingSelfTests.rgb(rendered, x: 64, y: 64)
+        try require(center[0] > 150 && center[1] < 150, "annotations still paint actual target content")
+        slot.setTargetVisible(false)
+        try require(slot.snapshot().frame.contentRect == nil, "source loss clears both pixels and their footprint")
+        let empty: [SCStreamFrameInfo: Any] = [.contentRect: CGRect.zero.dictionaryRepresentation]
+        try require(RecordingSourceSession.pixelContentRect(attachments: empty, pixelSize: CGSize(width: 128, height: 128)) == nil,
+                    "empty native content cannot keep a frozen target alive")
+        try require(RecordingFrameRenderer.logicalContentRect(source: frame, geometry: geometry, generation: 2) == nil,
+                    "old-session footprint cannot affect a new target")
     }
 
     private static func snapshot(_ canvas: ZoomCanvasView) throws -> RecordingOverlaySnapshot {

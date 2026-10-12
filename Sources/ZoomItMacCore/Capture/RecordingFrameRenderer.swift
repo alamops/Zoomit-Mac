@@ -9,12 +9,17 @@ struct RecordingSourceFrame: @unchecked Sendable {
     let presentationTime: CMTime
     let availability: RecordingSourceAvailability
     let generation: UInt64
+    /// Actual target footprint in the fixed image's top-left pixel coordinates.
+    /// Native buffers can retain their size while the contained window resizes.
+    let contentRect: CGRect?
 
-    init(image: CGImage?, presentationTime: CMTime, availability: RecordingSourceAvailability, generation: UInt64) {
+    init(image: CGImage?, presentationTime: CMTime, availability: RecordingSourceAvailability, generation: UInt64,
+         contentRect: CGRect? = nil) {
         self.image = image
         self.presentationTime = presentationTime
         self.availability = availability
         self.generation = generation
+        self.contentRect = contentRect
     }
 }
 
@@ -43,11 +48,12 @@ struct RecordingOverlaySnapshot: @unchecked Sendable {
     let caret: RecordingCaretSnapshot?
     let cursor: RecordingCursorSnapshot?
     let sketchPad: RecordingSketchPad?
+    let activeContentRect: CGRect?
 
     init(generation: UInt64, viewport: CGRect, frozenImage: CGImage? = nil,
          annotations: [Annotation] = [], inProgress: Annotation? = nil,
          caret: RecordingCaretSnapshot? = nil, cursor: RecordingCursorSnapshot? = nil,
-         sketchPad: RecordingSketchPad? = nil) {
+         sketchPad: RecordingSketchPad? = nil, activeContentRect: CGRect? = nil) {
         self.generation = generation
         self.viewport = viewport
         self.frozenImage = frozenImage
@@ -56,6 +62,7 @@ struct RecordingOverlaySnapshot: @unchecked Sendable {
         self.caret = caret
         self.cursor = cursor
         self.sketchPad = sketchPad
+        self.activeContentRect = activeContentRect
     }
 }
 
@@ -68,6 +75,17 @@ struct RecordingWebcamSnapshot: @unchecked Sendable {
 }
 
 enum RecordingFrameRenderer {
+    static func logicalContentRect(source: RecordingSourceFrame?, geometry: RecordingCanvasGeometry,
+                                   generation: UInt64) -> CGRect? {
+        guard let source, source.generation == generation, source.availability == .available,
+              let image = source.image else { return nil }
+        let pixels = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let content = (source.contentRect ?? pixels).intersection(pixels)
+        guard !content.isNull, !content.isEmpty else { return nil }
+        let fit = geometry.sourceContentRect(forImageSize: pixels.size)
+        return content.applying(RecordingCanvasGeometry.transform(from: pixels, to: fit))
+    }
+
     /// Aspect-fit the latest isolated source into a fixed canvas before viewport
     /// transformations. UI static snapshots and video use the same normalization.
     static func normalizedSourceImage(source: RecordingSourceFrame?, geometry: RecordingCanvasGeometry,

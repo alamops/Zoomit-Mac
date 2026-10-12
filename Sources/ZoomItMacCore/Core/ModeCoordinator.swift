@@ -544,7 +544,8 @@ final class ModeCoordinator {
                                                                          generation: recordingController.isolatedGeneration) else { return }
         let source = recordingController.isolatedSourceFrame
         let available = source?.availability == .available && source?.image != nil
-        let footprint = source?.image.map { geometry.sourceContentRect(forImageSize: CGSize(width: $0.width, height: $0.height)) }
+        let footprint = RecordingFrameRenderer.logicalContentRect(source: source, geometry: geometry,
+                                                                   generation: recordingController.isolatedGeneration)
         recordingController.updateIsolatedPresentationHost(frame: display.frame)
         let frame = CapturedFrame(image: image, display: display,
                                   pixelSize: CGSize(width: image.width, height: image.height), timestamp: Date())
@@ -575,7 +576,7 @@ final class ModeCoordinator {
               let geometry,
               let image = RecordingFrameRenderer.normalizedSourceImage(source: source, geometry: geometry, generation: generation) else { return }
         let available = source?.generation == generation && source?.availability == .available && source?.image != nil
-        let footprint = source?.image.map { geometry.sourceContentRect(forImageSize: CGSize(width: $0.width, height: $0.height)) }
+        let footprint = RecordingFrameRenderer.logicalContentRect(source: source, geometry: geometry, generation: generation)
         overlayController.updateIsolatedSource(image: image, activeContentRect: footprint,
                                               available: available, generation: generation)
     }

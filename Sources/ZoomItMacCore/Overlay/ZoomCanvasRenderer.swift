@@ -36,6 +36,8 @@ enum ZoomCanvasRenderer {
             drawImage(image, in: logicalBounds, context: context)
         }
         if let overlay {
+            context.saveGState()
+            if let footprint = overlay.activeContentRect { context.clip(to: footprint.intersection(logicalBounds)) }
             AnnotationRenderer.render(annotations: overlay.annotations, inProgress: overlay.inProgress,
                                       in: context, bounds: logicalBounds)
             if let caret = overlay.caret {
@@ -46,9 +48,11 @@ enum ZoomCanvasRenderer {
                 context.addLine(to: CGPoint(x: caret.origin.x, y: caret.origin.y + caret.height))
                 context.strokePath()
             }
+            context.restoreGState()
         }
         context.restoreGState()
-        if let cursor = overlay?.cursor, source.contains(cursor.point) {
+        if let cursor = overlay?.cursor, source.contains(cursor.point),
+           overlay?.activeContentRect?.contains(cursor.point) != false {
             let center = cursor.point.applying(transform)
             let radius = max(4, cursor.rootWidth * transform.a / 2)
             context.setFillColor(cursor.color.nsColor.cgColor)

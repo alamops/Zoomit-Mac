@@ -167,7 +167,7 @@ final class PickerProbeDelegate: NSObject, NSApplicationDelegate, SCContentShari
         frameCount += 1
         let detail: [String: Any] = ["status": sample.status, "phase": phase,
                                      "time": ProcessInfo.processInfo.systemUptime,
-                                     "markers": sample.markers]
+                                     "markers": sample.markers, "frameMetadata": sample.metadata]
         if let image = sample.image { latestImage = image }
         frames.append(detail)
         if frames.count > 1_200 { frames.removeFirst(frames.count - 1_200) }
@@ -218,6 +218,7 @@ private struct ProbeSample {
     var markers: [String: Double] = [:]
     var image: CGImage?
     var audio = false
+    var metadata: [String: Any] = [:]
 }
 private final class ProbeOutput: NSObject, SCStreamOutput {
     let queue = DispatchQueue(label: "com.sysinternals.zoomitmac.pickerprobe.samples")
@@ -230,6 +231,19 @@ private final class ProbeOutput: NSObject, SCStreamOutput {
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let rawStatus = attachments.first?[.status] as? Int else { return }
         var sample = ProbeSample(source: stream, status: rawStatus)
+        if let info = attachments.first {
+            if let value = info[.contentRect] as? [String: Any],
+               let rect = CGRect(dictionaryRepresentation: value as CFDictionary) {
+                sample.metadata["contentRect"] = ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
+            }
+            for (key, name) in [(SCStreamFrameInfo.contentScale, "contentScale"), (.scaleFactor, "scaleFactor")] {
+                if let number = info[key] as? NSNumber { sample.metadata[name] = number.doubleValue }
+            }
+            if let buffer = sampleBuffer.imageBuffer {
+                sample.metadata["pixelWidth"] = CVPixelBufferGetWidth(buffer)
+                sample.metadata["pixelHeight"] = CVPixelBufferGetHeight(buffer)
+            }
+        }
         let now = ProcessInfo.processInfo.systemUptime
         if rawStatus == SCFrameStatus.complete.rawValue {
             guard now - lastSampleTime >= 0.1 else { return }

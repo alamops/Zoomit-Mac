@@ -15,6 +15,7 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
     private let generation: UInt64
     private var policy = RecordingSourcePolicy()
     private var image: CGImage?
+    private var contentRect: CGRect?
     private var timestamp = CMTime.invalid
     private var revision: UInt64 = 0
     private var errorDescription: String?
@@ -35,12 +36,14 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
         lock.lock()
         defer { lock.unlock() }
         return Snapshot(frame: RecordingSourceFrame(image: image, presentationTime: timestamp,
-                                                    availability: policy.availability, generation: generation),
+                                                    availability: policy.availability, generation: generation,
+                                                    contentRect: contentRect),
                         revision: revision, errorDescription: errorDescription)
     }
 
     /// Also serves deterministic lifecycle tests without needing native buffers.
-    func consume(_ update: RecordingSourcePolicy.Update, image newImage: CGImage? = nil, presentationTime: CMTime = .invalid) {
+    func consume(_ update: RecordingSourcePolicy.Update, image newImage: CGImage? = nil,
+                 presentationTime: CMTime = .invalid, contentRect newContentRect: CGRect? = nil) {
         lock.lock()
         defer { lock.unlock() }
         guard acceptingFrames, policy.availability != .ended else { return }
@@ -49,6 +52,7 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
         if case .complete = update, newImage == nil { policy.consume(.suspended) }
         else { policy.consume(update) }
         image = policy.availability == .available ? newImage : nil
+        contentRect = policy.availability == .available ? newContentRect : nil
         timestamp = presentationTime
         revision &+= 1
     }
@@ -58,6 +62,7 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
         defer { lock.unlock() }
         policy.consume(.stopped)
         image = nil
+        contentRect = nil
         errorDescription = error?.localizedDescription
         revision &+= 1
     }
@@ -72,6 +77,7 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
         if !visible {
             policy.consume(.suspended)
             image = nil
+            contentRect = nil
             revision &+= 1
         }
     }
@@ -84,6 +90,7 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
         if hidden {
             policy.consume(.suspended)
             image = nil
+            contentRect = nil
             revision &+= 1
         }
     }
@@ -92,6 +99,7 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
         lock.lock()
         acceptingFrames = false
         image = nil
+        contentRect = nil
         lock.unlock()
     }
 
@@ -111,6 +119,14 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
         switch status {
         case .complete, .started:
             guard sampleBuffer.isValid, let buffer = sampleBuffer.imageBuffer else { return }
+            let info = attachments[0]
+            let footprint = Self.pixelContentRect(attachments: info,
+                pixelSize: CGSize(width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer)))
+            if info[.contentRect] != nil && footprint == nil {
+                // Empty/invalid native content must invalidate frozen imagery.
+                consume(.blank, presentationTime: time)
+                return
+            }
             // Copy out of IOSurface-backed capture storage before publishing.
             // createCGImage alone can retain a recyclable CVPixelBuffer surface.
             let source = CIImage(cvPixelBuffer: buffer)
@@ -120,7 +136,7 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
                                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
             copy.draw(rendered, in: CGRect(x: 0, y: 0, width: rendered.width, height: rendered.height))
             guard let owned = copy.makeImage() else { return }
-            consume(.complete, image: owned, presentationTime: time)
+            consume(.complete, image: owned, presentationTime: time, contentRect: footprint)
         case .idle: consume(.idle, presentationTime: time)
         case .blank: consume(.blank, presentationTime: time)
         case .suspended: consume(.suspended, presentationTime: time)
@@ -131,12 +147,36 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
 
     func stream(_ stream: SCStream, didStopWithError error: Error) { end(error: error) }
 
+    /// Frame metadata expresses the content rectangle and its scale separately.
+    /// Convert to buffer pixels before mapping into the fixed logical canvas.
+    static func pixelContentRect(attachments: [SCStreamFrameInfo: Any], pixelSize: CGSize) -> CGRect? {
+        let rect: CGRect?
+        if let value = attachments[.contentRect] as? CGRect { rect = value }
+        else if let value = attachments[.contentRect] as? NSValue { rect = value.rectValue }
+        else if let value = attachments[.contentRect] as? [String: Any] {
+            rect = CGRect(dictionaryRepresentation: value as CFDictionary)
+        } else { rect = nil }
+        guard let rect, rect.minX.isFinite, rect.minY.isFinite,
+              rect.width.isFinite, rect.height.isFinite, !rect.isEmpty, !rect.isNull else { return nil }
+        func scale(_ key: SCStreamFrameInfo) -> CGFloat {
+            if let number = attachments[key] as? NSNumber { return CGFloat(number.doubleValue) }
+            return attachments[key] as? CGFloat ?? 1
+        }
+        let factor = scale(.contentScale) * scale(.scaleFactor)
+        guard factor.isFinite, factor > 0, pixelSize.width.isFinite, pixelSize.height.isFinite,
+              pixelSize.width > 0, pixelSize.height > 0 else { return nil }
+        let pixels = rect.applying(CGAffineTransform(scaleX: factor, y: factor))
+            .intersection(CGRect(origin: .zero, size: pixelSize))
+        return pixels.isNull || pixels.isEmpty ? nil : pixels
+    }
+
     @available(macOS 15.2, *)
     func streamDidBecomeInactive(_ stream: SCStream) {
         lock.lock()
         inactive = true
         policy.consume(.suspended)
         image = nil
+        contentRect = nil
         revision &+= 1
         lock.unlock()
     }

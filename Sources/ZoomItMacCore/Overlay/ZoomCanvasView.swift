@@ -180,7 +180,7 @@ final class ZoomCanvasView: NSView {
                                         frozenImage: isolatedUsesLiveSource ? nil : capturedFrame.image,
                                         annotations: annotationController.annotationSnapshot,
                                         inProgress: annotationController.inProgressSnapshot, caret: caret,
-                                        cursor: cursor, sketchPad: sketch)
+                                        cursor: cursor, sketchPad: sketch, activeContentRect: activeContentRect)
     }
 
     /// Toggles drawing mode from outside (e.g. the draw hotkey while live
