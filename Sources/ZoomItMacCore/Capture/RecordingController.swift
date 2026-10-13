@@ -1181,10 +1181,9 @@ final class RecordingController {
             engine.appendSystemAudio(SampleBufferBox(buffer: sample))
         })
         sourceSession = source
-        let configuration = SCStreamConfiguration()
+        let configuration = RecordingColorSpace.makeCaptureConfiguration()
         configuration.width = geometry.outputWidth
         configuration.height = geometry.outputHeight
-        configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
         configuration.queueDepth = 5
         configuration.scalesToFit = true

@@ -26,6 +26,9 @@ final class RecordingUITests: XCTestCase {
         if let recorder {
             let tree = XCTAttachment(string: recorder.debugDescription)
             tree.name = "recorder-final-tree"; tree.lifetime = .keepAlways; add(tree)
+            if RecordingTestEnvironment.status(in: recorder).contains("Choose a recording target") {
+                picker?.cancel(from: recorder)
+            }
         }
         for app in [recorder, a, b].compactMap({ $0 }) where app.state != .notRunning { app.terminate() }
     }
@@ -115,6 +118,9 @@ final class RecordingUITests: XCTestCase {
         entry.click()
         entry.typeKey("a", modifierFlags: [.command])
         entry.typeText(url.lastPathComponent)
+        guard entry.value as? String == url.lastPathComponent else {
+            throw HarnessError("Native filename entry did not accept the requested name. Actual: \(String(describing: entry.value)); expected: \(url.lastPathComponent)")
+        }
         let saveButton = recorder.dialogs.buttons["Save"].firstMatch
         guard saveButton.isEnabled else { throw HarnessError("Native save destination is not writable: \(environment.artifacts.path)") }
         saveButton.click()
@@ -128,7 +134,7 @@ final class RecordingUITests: XCTestCase {
     func testPickerCancelDuplicateRequestRetryAndEditorCancel() throws {
         try RecordingTestEnvironment.menuAction("recording.recordWindow", in: recorder)
         try state(containing: "Choose a recording target")
-        a.typeKey("5", modifierFlags: [.control, .option, .shift])
+        try picker.typeShortcutDuringSelection("5", flags: [.control, .option, .shift])
         try state(containing: "Choose a recording target")
         picker.cancel(from: recorder)
         try ready()

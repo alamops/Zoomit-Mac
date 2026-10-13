@@ -35,6 +35,7 @@ final class PickerProbeDelegate: NSObject, NSApplicationDelegate, SCContentShari
     private var latestImage: CGImage?
     private var frameCount = 0
     private var audioCount = 0
+    private var savedFirstFrame = false
     private var outputDirectory: URL {
         let path = ProcessInfo.processInfo.environment["ZOOMIT_UI_ARTIFACTS"]
             ?? NSTemporaryDirectory().appending("ZoomItPickerProbe")
@@ -90,6 +91,7 @@ final class PickerProbeDelegate: NSObject, NSApplicationDelegate, SCContentShari
         guard stream == nil, status.stringValue != "selecting" else { return }
         generation += 1; requested = mode; selected = false
         phase = "initial"; frames.removeAll(); frameCount = 0; audioCount = 0; latestImage = nil
+        savedFirstFrame = false
         var configuration = SCContentSharingPickerConfiguration()
         configuration.allowedPickerModes = mode == "window" ? .singleWindow : .singleApplication
         configuration.excludedBundleIDs = [Bundle.main.bundleIdentifier!]
@@ -129,6 +131,9 @@ final class PickerProbeDelegate: NSObject, NSApplicationDelegate, SCContentShari
             }
             self.record("authorizedFilter", details: self.metadata)
             let configuration = SCStreamConfiguration()
+            // Marker colors are specified in sRGB. An unspecified capture
+            // space inherits the display profile, which may be Display P3.
+            configuration.colorSpaceName = CGColorSpace.sRGB
             // Small bounded probe frames keep repeated journal samples inexpensive.
             let ratio = max(0.01, filter.contentRect.height / max(1, filter.contentRect.width))
             configuration.width = 640
@@ -173,7 +178,13 @@ final class PickerProbeDelegate: NSObject, NSApplicationDelegate, SCContentShari
         let detail: [String: Any] = ["status": sample.status, "phase": phase,
                                      "time": ProcessInfo.processInfo.systemUptime,
                                      "markers": sample.markers, "frameMetadata": sample.metadata]
-        if let image = sample.image { latestImage = image }
+        if let image = sample.image {
+            latestImage = image
+            if !savedFirstFrame {
+                savedFirstFrame = true
+                snapshot()
+            }
+        }
         frames.append(detail)
         if frames.count > 1_200 { frames.removeFirst(frames.count - 1_200) }
         writeJournal()
@@ -247,6 +258,16 @@ private final class ProbeOutput: NSObject, SCStreamOutput {
             if let buffer = sampleBuffer.imageBuffer {
                 sample.metadata["pixelWidth"] = CVPixelBufferGetWidth(buffer)
                 sample.metadata["pixelHeight"] = CVPixelBufferGetHeight(buffer)
+                for (key, name) in [(kCVImageBufferColorPrimariesKey, "colorPrimaries"),
+                                    (kCVImageBufferTransferFunctionKey, "transferFunction"),
+                                    (kCVImageBufferYCbCrMatrixKey, "yCbCrMatrix")] {
+                    if let value = CVBufferCopyAttachment(buffer, key, nil) {
+                        sample.metadata[name] = String(describing: value)
+                    }
+                }
+                if let space = CVBufferCopyAttachment(buffer, kCVImageBufferCGColorSpaceKey, nil) {
+                    sample.metadata["colorSpace"] = String(describing: space)
+                }
             }
         }
         let now = ProcessInfo.processInfo.systemUptime

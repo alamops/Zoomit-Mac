@@ -32,7 +32,17 @@ final class NativePickerDriver {
             // without exposing those controls in its accessibility tree. Both
             // requesters pin the scope, so select the actual target using public
             // pointer events and require the OS-issued selection to be accepted.
-            let choice = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            // Target the picker's own window surface. A coordinate rooted in
+            // the fixture makes XCTest treat the intentional system picker as
+            // an interruption and press its Cancel button before the hover.
+            let frame = target.frame
+            let controls = systemApps[0].dialogs.firstMatch
+            guard controls.waitForExistence(timeout: 8) else { throw HarnessError("Native picker controls did not appear") }
+            // The per-window highlight is created by the hover itself. Anchor
+            // the absolute pointer position in the already-present system UI.
+            let origin = controls.frame.origin
+            let choice = controls.coordinate(withNormalizedOffset: .zero).withOffset(
+                CGVector(dx: frame.midX - origin.x, dy: frame.midY - origin.y))
             choice.hover()
             choice.click()
             do {
@@ -72,6 +82,13 @@ final class NativePickerDriver {
         if !clickSystemElement(labels: ["Cancel", "Stop Selecting", "Close"], types: [.button]) {
             requestingApp.typeKey(.escape, modifierFlags: [])
         }
+    }
+    func typeShortcutDuringSelection(_ key: String, flags: XCUIElement.KeyModifierFlags) throws {
+        let controls = systemApps[0].dialogs.firstMatch
+        guard controls.waitForExistence(timeout: 8) else { throw HarnessError("Native picker controls did not appear") }
+        // Keep the intentional chooser as the keyboard event's target so
+        // XCTest's interruption handler cannot cancel it before the shortcut.
+        controls.typeKey(key, modifierFlags: flags)
     }
     func withdrawSharing() throws {
         let candidates = ["Screen Sharing", "Screen Recording", "Sharing", "Recording"]

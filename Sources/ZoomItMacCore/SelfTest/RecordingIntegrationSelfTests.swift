@@ -16,6 +16,7 @@ enum RecordingIntegrationSelfTests {
             do {
                 try await writeAndDecode(green: green, black: black, noFirstSourceFrame: false)
                 try await writeAndDecode(green: green, black: black, noFirstSourceFrame: true)
+                try await fixtureColorSurvivesWriterAndTrim()
                 try await cancellationRemovesTemporaryMovie()
                 try await finalFrameWaitsForReadiness(green: green, black: black)
                 try await finalFrameTimeoutFailsWithoutFallback(green: green, black: black)
@@ -149,6 +150,63 @@ enum RecordingIntegrationSelfTests {
         guard !FileManager.default.fileExists(atPath: url.path) else { throw SelfTestError.failure("Cancelled writer leaked temporary movie") }
     }
 
+    nonisolated private static func fixtureColorSurvivesWriterAndTrim() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("fixture-color-\(UUID().uuidString).mp4")
+        let trimmedURL = FileManager.default.temporaryDirectory.appendingPathComponent("fixture-color-trim-\(UUID().uuidString).mp4")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: trimmedURL)
+        }
+        guard let context = CGContext(data: nil, width: 64, height: 48, bitsPerComponent: 8,
+                                      bytesPerRow: 256, space: RecordingColorSpace.rgb,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            throw SelfTestError.failure("Fixture color context failed")
+        }
+        context.setFillColor(CGColor(srgbRed: 0.05, green: 0.85, blue: 0.1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 64, height: 48))
+        guard let image = context.makeImage() else { throw SelfTestError.failure("Fixture color image failed") }
+        let engine = try RecordingEngine(url: url, width: 64, height: 48, systemAudio: false, microphone: false, permitsFallback: false)
+        try await engine.startWriting()
+        for index in 0..<12 {
+            guard engine.appendVideoImageBounded(RecordingImageFrame(image: image,
+                presentationTime: CMTime(value: Int64(index), timescale: 30), duration: CMTime(value: 1, timescale: 30))) else {
+                throw SelfTestError.failure("Writer rejected fixture color frame")
+            }
+            await engine.waitForQueuedAppends()
+            try await Task.sleep(nanoseconds: 34_000_000)
+        }
+        engine.appendVideoImageAtEnd(RecordingImageFrame(image: image,
+            presentationTime: CMTime(value: 12, timescale: 30), duration: CMTime(value: 1, timescale: 30)))
+        guard await finish(engine) == url else { throw SelfTestError.failure("Fixture color recording failed") }
+        let asset = AVURLAsset(url: url)
+        guard let sourceTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            throw SelfTestError.failure("Fixture color recording has no track")
+        }
+        let composition = AVMutableComposition()
+        guard let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw SelfTestError.failure("Fixture color trim track failed")
+        }
+        try track.insertTimeRange(CMTimeRange(start: .zero, duration: try await asset.load(.duration)), of: sourceTrack, at: .zero)
+        guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+            throw SelfTestError.failure("Fixture color trim exporter failed")
+        }
+        exporter.outputURL = trimmedURL
+        exporter.outputFileType = .mp4
+        exporter.timeRange = CMTimeRange(start: CMTime(value: 3, timescale: 30), duration: CMTime(value: 6, timescale: 30))
+        await exporter.export()
+        guard exporter.status == .completed else { throw SelfTestError.failure("Fixture color trim export failed: \(String(describing: exporter.error))") }
+        for movie in [asset, AVURLAsset(url: trimmedURL)] {
+            let generator = AVAssetImageGenerator(asset: movie)
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            let decoded = try generator.copyCGImage(at: CMTime(value: 1, timescale: 30), actualTime: nil)
+            let actual = try average(decoded)
+            guard zip(actual, [12.75, 216.75, 25.5]).allSatisfy({ abs($0.0 - $0.1) <= 8 }) else {
+                throw SelfTestError.failure("Fixture sRGB green changed through recording/trim export: \(actual)")
+            }
+        }
+    }
+
     nonisolated private static func seedGreenVideo(_ engine: RecordingEngine, image: CGImage) async throws {
         try await engine.startWriting()
         for index in 0..<3 {
@@ -245,7 +303,7 @@ enum RecordingIntegrationSelfTests {
         var pixels = [UInt8](repeating: 0, count: 64 * 48 * 4)
         try pixels.withUnsafeMutableBytes { raw in
             guard let context = CGContext(data: raw.baseAddress, width: 64, height: 48, bitsPerComponent: 8,
-                                          bytesPerRow: 256, space: CGColorSpaceCreateDeviceRGB(),
+                                          bytesPerRow: 256, space: RecordingColorSpace.rgb,
                                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw SelfTestError.failure("MP4 decode context failed") }
             context.draw(image, in: CGRect(x: 0, y: 0, width: 64, height: 48))
         }

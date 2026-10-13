@@ -131,6 +131,9 @@ struct RecordingTestEnvironment {
         }
     }
     static func click(_ identifier: String, in app: XCUIApplication, timeout: TimeInterval = 8) throws {
+        // Fixture control windows can occupy the same screen coordinates. Bring
+        // the requested app forward before synthesizing its pointer event.
+        app.activate()
         let button = app.buttons[identifier]
         guard button.waitForExistence(timeout: timeout), button.isEnabled else {
             throw HarnessError("Cannot use \(identifier). Ensure the desktop is unlocked and allow Xcode's test runner in Privacy & Security > Accessibility and Automation. UI: \(app.debugDescription)")

@@ -12,9 +12,36 @@ enum RecordingSelfTests {
         try pickerWindowIDValidation()
         try pickerSelectionValidation()
         try sourcePolicyAndTimeline()
+        try captureColorContract()
         try renderingIsolationAndOrientation()
         try annotationEquivalenceAndHighlights()
         try webcamPlacementAndAspect()
+    }
+
+    private static func captureColorContract() throws {
+        let configuration = RecordingColorSpace.makeCaptureConfiguration()
+        try expect(configuration.colorSpaceName == CGColorSpace.sRGB && configuration.pixelFormat == kCVPixelFormatType_32BGRA,
+                   "isolated capture must request sRGB rather than inheriting a wide-gamut display profile")
+        let geometry = try canvas(64, 48)
+        // This is the native fixture's green, whose Display P3 coordinates have
+        // a large red component. Gamut extrema alone miss that misinterpretation.
+        for space in [RecordingColorSpace.rgb, CGColorSpace(name: CGColorSpace.displayP3)!] {
+            guard let context = CGContext(data: nil, width: 64, height: 48, bitsPerComponent: 8,
+                                          bytesPerRow: 256, space: space,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw SelfTestError.failure("Recording: color fixture context failed")
+            }
+            context.setFillColor(CGColor(srgbRed: 0.05, green: 0.85, blue: 0.1, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 48))
+            guard let image = context.makeImage(),
+                  let rendered = RecordingFrameRenderer.render(source: RecordingSourceFrame(image: image, presentationTime: .zero, availability: .available, generation: 1),
+                                                              overlay: nil, geometry: geometry, generation: 1) else {
+                throw SelfTestError.failure("Recording: color fixture render failed")
+            }
+            let actual = try rgb(rendered, x: 32, y: 24)
+            try expect(zip(actual, [13, 217, 26]).allSatisfy { abs(Int($0.0) - $0.1) <= 2 },
+                       "fixture green must remain sRGB after rendering a tagged source: \(actual)")
+        }
     }
 
     private static func pickerWindowIDValidation() throws {
