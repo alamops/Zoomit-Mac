@@ -187,6 +187,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 let menuItem = NSMenuItem(title: entry.title, action: entry.action, keyEquivalent: entry.keyEquivalent)
                 let identifier: String?
                 switch entry.action {
+                case #selector(AppController.showSettings): identifier = "settings.open"
                 case #selector(AppController.toggleRecording): identifier = "recording.recordScreen"
                 case #selector(AppController.toggleRecordingRegion): identifier = "recording.recordRegion"
                 case #selector(AppController.toggleRecordingWindow): identifier = "recording.recordWindow"

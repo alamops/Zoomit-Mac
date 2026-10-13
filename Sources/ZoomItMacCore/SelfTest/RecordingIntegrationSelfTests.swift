@@ -17,6 +17,10 @@ enum RecordingIntegrationSelfTests {
                 try await writeAndDecode(green: green, black: black, noFirstSourceFrame: false)
                 try await writeAndDecode(green: green, black: black, noFirstSourceFrame: true)
                 try await cancellationRemovesTemporaryMovie()
+                try await finalFrameWaitsForReadiness(green: green, black: black)
+                try await finalFrameTimeoutFailsWithoutFallback(green: green, black: black)
+                try await missingFinalFrameFailsWithoutFallback(green: green)
+                try await cancellationInterruptsFinalFrameWait(green: green, black: black)
                 outcome.store(.success(()))
             } catch { outcome.store(.failure(error)) }
             done.signal()
@@ -145,6 +149,98 @@ enum RecordingIntegrationSelfTests {
         guard !FileManager.default.fileExists(atPath: url.path) else { throw SelfTestError.failure("Cancelled writer leaked temporary movie") }
     }
 
+    nonisolated private static func seedGreenVideo(_ engine: RecordingEngine, image: CGImage) async throws {
+        try await engine.startWriting()
+        for index in 0..<3 {
+            engine.appendVideoImageBounded(RecordingImageFrame(image: image,
+                presentationTime: CMTime(value: Int64(300 + index), timescale: 30), duration: CMTime(value: 1, timescale: 30)))
+            await engine.waitForQueuedAppends()
+            try await Task.sleep(nanoseconds: 34_000_000)
+        }
+    }
+
+    nonisolated private static func finish(_ engine: RecordingEngine) async -> URL? {
+        await withCheckedContinuation { continuation in engine.finish { continuation.resume(returning: $0) } }
+    }
+
+    nonisolated private static func finalFrameWaitsForReadiness(green: CGImage, black: CGImage) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("final-ready-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let probe = FinalFrameProbe(readyOnAttempt: 4)
+        let engine = try RecordingEngine(url: url, width: 64, height: 48, systemAudio: true, microphone: true,
+            permitsFallback: false, onFailure: { probe.record($0) }, finalFrameTimeout: 1,
+            finalFrameReadiness: { probe.isReady() })
+        try await seedGreenVideo(engine, image: green)
+        engine.appendVideoImageAtEnd(RecordingImageFrame(image: black,
+            presentationTime: CMTime(value: 306, timescale: 30), duration: CMTime(value: 1, timescale: 30)))
+        guard await finish(engine) == url, probe.snapshot().attempts >= 4, probe.snapshot().failures == 0 else {
+            throw SelfTestError.failure("Required final frame did not survive temporary writer backpressure")
+        }
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let first = try generator.copyCGImage(at: CMTime(value: 1, timescale: 30), actualTime: nil)
+        let last = try generator.copyCGImage(at: CMTime(value: 6, timescale: 30), actualTime: nil)
+        guard try average(first)[1] > 220, try average(last).allSatisfy({ $0 < 12 }) else {
+            throw SelfTestError.failure("Finalized MP4 must replace the last authorized green image with the required black Stop frame")
+        }
+    }
+
+    nonisolated private static func finalFrameTimeoutFailsWithoutFallback(green: CGImage, black: CGImage) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("final-timeout-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let probe = FinalFrameProbe(readyOnAttempt: nil)
+        let engine = try RecordingEngine(url: url, width: 64, height: 48, systemAudio: false, microphone: false,
+            permitsFallback: true, onFailure: { probe.record($0) }, finalFrameTimeout: 0.05,
+            finalFrameReadiness: { probe.isReady() })
+        try await seedGreenVideo(engine, image: green)
+        engine.appendVideoImageAtEnd(RecordingImageFrame(image: black, presentationTime: CMTime(value: 306, timescale: 30)))
+        let start = ProcessInfo.processInfo.systemUptime
+        let result = await finish(engine)
+        let evidence = probe.snapshot()
+        guard result == nil, evidence.failures == 1, evidence.timedOut, evidence.attempts > 0,
+              ProcessInfo.processInfo.systemUptime - start < 1,
+              !FileManager.default.fileExists(atPath: url.path) else {
+            throw SelfTestError.failure("Final-frame timeout must fail once, remain bounded, remove the partial clip, and never substitute a fallback movie")
+        }
+    }
+
+    nonisolated private static func cancellationInterruptsFinalFrameWait(green: CGImage, black: CGImage) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("final-cancel-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let probe = FinalFrameProbe(readyOnAttempt: nil)
+        let engine = try RecordingEngine(url: url, width: 64, height: 48, systemAudio: false, microphone: false,
+            permitsFallback: false, onFailure: { probe.record($0) }, finalFrameTimeout: 1,
+            finalFrameReadiness: { probe.isReady() })
+        try await seedGreenVideo(engine, image: green)
+        engine.appendVideoImageAtEnd(RecordingImageFrame(image: black, presentationTime: CMTime(value: 306, timescale: 30)))
+        let finishing = Task { await finish(engine) }
+        for _ in 0..<50 {
+            if probe.snapshot().attempts > 0 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        await engine.cancel()
+        let result = await finishing.value
+        guard result == nil, probe.snapshot().attempts > 0, probe.snapshot().failures == 0,
+              !FileManager.default.fileExists(atPath: url.path) else {
+            throw SelfTestError.failure("Cancellation must interrupt the final-frame wait without a successful clip or spurious writer error")
+        }
+    }
+
+    nonisolated private static func missingFinalFrameFailsWithoutFallback(green: CGImage) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("final-missing-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let probe = FinalFrameProbe(readyOnAttempt: nil)
+        let engine = try RecordingEngine(url: url, width: 64, height: 48, systemAudio: false, microphone: false,
+            permitsFallback: true, onFailure: { probe.record($0) })
+        try await seedGreenVideo(engine, image: green)
+        engine.appendVideoImageAtEnd(nil)
+        guard await finish(engine) == nil, probe.snapshot().failures == 1,
+              !FileManager.default.fileExists(atPath: url.path) else {
+            throw SelfTestError.failure("A missing required final image must not export old imagery or a fallback movie")
+        }
+    }
+
     nonisolated private static func average(_ image: CGImage) throws -> [Double] {
         var pixels = [UInt8](repeating: 0, count: 64 * 48 * 4)
         try pixels.withUnsafeMutableBytes { raw in
@@ -158,6 +254,29 @@ enum RecordingIntegrationSelfTests {
 
     private static func require(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
         if try !condition() { throw SelfTestError.failure("Recording integration: \(message)") }
+    }
+}
+
+private final class FinalFrameProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let readyOnAttempt: Int?
+    private var attempts = 0
+    private var failures = 0
+    private var timedOut = false
+    init(readyOnAttempt: Int?) { self.readyOnAttempt = readyOnAttempt }
+    func isReady() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        attempts += 1
+        return readyOnAttempt.map { attempts >= $0 } ?? false
+    }
+    func record(_ error: Error) {
+        lock.lock(); defer { lock.unlock() }
+        failures += 1
+        if let error = error as? RecordingEngine.FinalFrameError, case .readinessTimedOut = error { timedOut = true }
+    }
+    func snapshot() -> (attempts: Int, failures: Int, timedOut: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        return (attempts, failures, timedOut)
     }
 }
 

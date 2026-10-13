@@ -27,6 +27,7 @@ struct RecordingImageFrame: @unchecked Sendable {
 /// it can safely receive buffers from the ScreenCaptureKit and microphone
 /// capture callbacks (which run on background queues).
 final class RecordingEngine: @unchecked Sendable {
+    enum FinalFrameError: Error { case missingImage, readinessTimedOut }
     let url: URL
     private let queue = DispatchQueue(label: "com.zoomitmac.recorder")
     private let writer: AVAssetWriter
@@ -49,11 +50,20 @@ final class RecordingEngine: @unchecked Sendable {
     private let onFailure: (@Sendable (Error) -> Void)?
     private let pendingImageLock = NSLock()
     private var imagePending = false
+    private var finalImage: RecordingImageFrame?
+    private var finalImageError: Error?
+    private let finalFrameTimeout: TimeInterval
+    private let finalFrameReadiness: @Sendable () -> Bool
 
-    init(url: URL, width: Int, height: Int, systemAudio: Bool, microphone: Bool, permitsFallback: Bool = true, onFailure: (@Sendable (Error) -> Void)? = nil) throws {
+    init(url: URL, width: Int, height: Int, systemAudio: Bool, microphone: Bool, permitsFallback: Bool = true,
+         onFailure: (@Sendable (Error) -> Void)? = nil, finalFrameTimeout: TimeInterval = 5,
+         finalFrameReadiness: @escaping @Sendable () -> Bool = { true }) throws {
+        guard finalFrameTimeout.isFinite, finalFrameTimeout > 0 else { throw ScreenCaptureError.recordingFailed }
         self.url = url
         self.permitsFallback = permitsFallback
         self.onFailure = onFailure
+        self.finalFrameTimeout = finalFrameTimeout
+        self.finalFrameReadiness = finalFrameReadiness
         self.width = width
         self.height = height
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -167,16 +177,13 @@ final class RecordingEngine: @unchecked Sendable {
         }
     }
 
-    func appendVideoImageAtEnd(_ frame: RecordingImageFrame) {
+    /// Retain the required final image until finish can append it successfully.
+    /// Unlike realtime frames, the Stop frame must never be silently dropped.
+    func appendVideoImageAtEnd(_ frame: RecordingImageFrame?) {
         queue.async {
-            guard !self.finished, self.writer.status == .writing else { return }
-            let presentationTime = self.monotonicVideoPresentationTime(for: frame.presentationTime)
-            guard let sampleBuffer = self.makeSampleBuffer(
-                from: frame.image,
-                presentationTime: presentationTime,
-                duration: frame.duration
-            ) else { return }
-            self.appendVideoOnQueue(sampleBuffer)
+            guard !self.finished else { return }
+            self.finalImage = frame
+            if frame == nil { self.finalImageError = FinalFrameError.missingImage }
         }
     }
 
@@ -231,27 +238,81 @@ final class RecordingEngine: @unchecked Sendable {
 
     func finish(completion: @escaping @Sendable (URL?) -> Void) {
         queue.async {
-            guard !self.finished, self.writer.status == .writing else {
+            guard !self.finished else { completion(nil); return }
+            if let error = self.finalImageError {
+                self.failFinalFrame(error, completion: completion)
+                return
+            }
+            guard self.writer.status == .writing else {
+                if self.finalImage != nil {
+                    self.failFinalFrame(self.writer.error ?? ScreenCaptureError.recordingFailed, completion: completion)
+                    return
+                }
                 if self.permitsFallback { self.writeFallbackMovie(completion: completion) }
                 else { completion(nil) }
                 return
             }
             self.finished = true
-            if let endTime = self.endSessionTime() {
-                self.writer.endSession(atSourceTime: endTime)
+            if !self.sessionStarted {
+                self.sessionStarted = true
+                self.writer.startSession(atSourceTime: .zero)
             }
-            self.videoInput.markAsFinished()
+            // No more audio can arrive after Stop. End those inputs before the
+            // final video wait so muxer backpressure can drain their queues.
             self.systemAudioInput?.markAsFinished()
             self.micInput?.markAsFinished()
-            let url = self.url
-            self.writer.finishWriting {
-                if self.writer.status == .completed {
-                    completion(url)
-                } else {
-                    if self.permitsFallback { self.writeFallbackMovie(completion: completion) }
-                    else { completion(nil) }
-                }
+            if self.finalImage != nil {
+                self.appendFinalFrame(deadline: .now() + self.finalFrameTimeout, completion: completion)
+            } else {
+                self.finishWriter(completion: completion)
             }
+        }
+    }
+
+    private func appendFinalFrame(deadline: DispatchTime, completion: @escaping @Sendable (URL?) -> Void) {
+        guard writer.status == .writing, let frame = finalImage else {
+            failFinalFrame(writer.error ?? ScreenCaptureError.recordingFailed, completion: completion)
+            return
+        }
+        // The gate can only restrict real readiness, so tests cannot cause an
+        // append to an input that AVAssetWriter itself reports as unready.
+        if videoInput.isReadyForMoreMediaData && finalFrameReadiness() {
+            guard let sample = makeSampleBuffer(from: frame.image,
+                presentationTime: monotonicVideoPresentationTime(for: frame.presentationTime), duration: frame.duration),
+                  appendVideoOnQueue(sample) else {
+                failFinalFrame(writer.error ?? ScreenCaptureError.recordingFailed, completion: completion)
+                return
+            }
+            finalImage = nil
+            finishWriter(completion: completion)
+        } else if DispatchTime.now().uptimeNanoseconds >= deadline.uptimeNanoseconds {
+            failFinalFrame(FinalFrameError.readinessTimedOut, completion: completion)
+        } else {
+            // Release the queue between attempts so cancellation remains live.
+            queue.asyncAfter(deadline: .now() + 0.01) {
+                self.appendFinalFrame(deadline: deadline, completion: completion)
+            }
+        }
+    }
+
+    private func failFinalFrame(_ error: Error, completion: @escaping @Sendable (URL?) -> Void) {
+        finished = true
+        finalImage = nil
+        if writer.status != .cancelled {
+            reportFailure(error)
+            writer.cancelWriting()
+        }
+        try? FileManager.default.removeItem(at: url)
+        completion(nil)
+    }
+
+    private func finishWriter(completion: @escaping @Sendable (URL?) -> Void) {
+        if let endTime = endSessionTime() { writer.endSession(atSourceTime: endTime) }
+        videoInput.markAsFinished()
+        writer.finishWriting {
+            if self.writer.status == .completed { completion(self.url) }
+            else if self.permitsFallback { self.writeFallbackMovie(completion: completion) }
+            else { completion(nil) }
         }
     }
 
@@ -266,7 +327,8 @@ final class RecordingEngine: @unchecked Sendable {
         }
     }
 
-    private func appendVideoOnQueue(_ sampleBuffer: CMSampleBuffer) {
+    @discardableResult
+    private func appendVideoOnQueue(_ sampleBuffer: CMSampleBuffer) -> Bool {
         if !sessionStarted {
             sessionStarted = true
             writer.startSession(atSourceTime: .zero)
@@ -275,7 +337,9 @@ final class RecordingEngine: @unchecked Sendable {
             hasVideoSample = true
             lastVideoPresentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             lastVideoDuration = effectiveDuration(for: sampleBuffer)
+            return true
         }
+        return false
     }
 
     private func normalizedPresentationTime(for sourceTime: CMTime) -> CMTime {
@@ -1356,7 +1420,7 @@ final class RecordingController {
             try? await stream?.stopCapture()
             if isolated {
                 await self.waitForIsolatedComposition()
-                if let finalImage { engine?.appendVideoImageAtEnd(finalImage) }
+                engine?.appendVideoImageAtEnd(finalImage)
             } else {
                 await streamOutput?.waitForPendingOverlayFrame()
                 streamOutput?.appendFinalOverlayFrameIfNeeded(presentationTime: stopTime)

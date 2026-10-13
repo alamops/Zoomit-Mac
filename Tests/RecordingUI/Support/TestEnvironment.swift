@@ -84,7 +84,7 @@ struct RecordingTestEnvironment {
             let indicator = element("recording.statusIndicator", in: recorder)
             guard indicator.waitForExistence(timeout: 10) else { throw HarnessError("Recorder did not expose its status item") }
             indicator.click()
-            let settings = recorder.menuItems["Settings…"]
+            let settings = recorder.menuItems["settings.open"]
             guard settings.waitForExistence(timeout: 5) else { throw HarnessError("Settings menu inaccessible: \(recorder.debugDescription)") }
             settings.click()
         }

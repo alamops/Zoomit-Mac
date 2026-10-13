@@ -234,7 +234,7 @@ final class ModeCoordinator {
         Task { @MainActor in
             do {
                 let frame = try await captureDisplayForOverlay(display)
-                guard !self.recordingController.isIsolatedRecording, self.recordingSessionState.phase != .selecting else { return }
+                guard self.recordingSessionState.allowsDesktopOverlayCapture else { return }
                 let settings = settingsStore.load()
                 viewportController.configure(for: frame, initialZoom: settings.defaultZoomFactor)
                 annotationController.reset()
@@ -289,7 +289,7 @@ final class ModeCoordinator {
                 // Capture one still frame for the initial display, then let the
                 // live stream keep refreshing the magnified content.
                 let frame = try await captureDisplayForOverlay(display)
-                guard !self.recordingController.isIsolatedRecording, self.recordingSessionState.phase != .selecting else { return }
+                guard self.recordingSessionState.allowsDesktopOverlayCapture else { return }
                 let settings = settingsStore.load()
                 viewportController.configure(for: frame, initialZoom: settings.defaultZoomFactor)
                 annotationController.reset()
@@ -368,7 +368,7 @@ final class ModeCoordinator {
         Task { @MainActor in
             do {
                 let frame = try await captureDisplayForOverlay(display)
-                guard !self.recordingController.isIsolatedRecording, self.recordingSessionState.phase != .selecting else { return }
+                guard self.recordingSessionState.allowsDesktopOverlayCapture else { return }
                 let settings = settingsStore.load()
                 // Draw-without-zoom freezes the screen at 1x and goes straight
                 // into drawing mode; there is no magnification or animation.

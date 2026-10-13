@@ -8,6 +8,7 @@ enum RecordingSelfTests {
         try geometryAndMapping()
         try lifecycleAndGeneration()
         try transitionCommandIsolation()
+        try delayedDesktopOverlayCaptureIsolation()
         try pickerWindowIDValidation()
         try pickerSelectionValidation()
         try sourcePolicyAndTimeline()
@@ -28,6 +29,27 @@ enum RecordingSelfTests {
         defer { window.close() }
         try expect(window.windowNumber == -1 && RecordingPickerController.validExcludedWindowIDs([window.windowNumber]).isEmpty,
                    "real unrealized AppKit windows reproduce the invalid window-ID case")
+    }
+
+    private static func delayedDesktopOverlayCaptureIsolation() throws {
+        for scope: RecordingScope in [.window, .application] {
+            var state = RecordingSessionState()
+            try expect(state.allowsDesktopOverlayCapture, "desktop capture can start before an isolated session")
+            guard let generation = state.begin(scope: scope) else { throw SelfTestError.failure("Isolated session failed to start") }
+            try expect(!state.allowsDesktopOverlayCapture, "a pending desktop capture must be rejected during selection")
+            for phase: RecordingSessionState.Phase in [.starting, .recording, .stopping, .editing, .saving] {
+                try expect(state.transition(to: phase, generation: generation), "advance isolated session to \(phase)")
+                try expect(!state.allowsDesktopOverlayCapture,
+                           "desktop captures finishing during \(scope) \(phase) must not reopen an overlay")
+            }
+            try expect(state.transition(to: .idle, generation: generation) && state.allowsDesktopOverlayCapture,
+                       "finishing an isolated session must restore desktop overlay capture")
+        }
+        for scope: RecordingScope in [.screen, .region] {
+            var state = RecordingSessionState()
+            _ = state.begin(scope: scope)
+            try expect(state.allowsDesktopOverlayCapture, "ordinary recordings retain desktop overlay support")
+        }
     }
 
     private static func transitionCommandIsolation() throws {

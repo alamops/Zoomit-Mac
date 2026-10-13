@@ -18,6 +18,9 @@ struct RecordingSessionState: Equatable, Sendable {
     var isRecording: Bool { phase == .recording }
     var canStart: Bool { phase == .idle }
     var canStop: Bool { phase == .recording }
+    /// Scope remains bound during startup, Stop, editing and Save; isRecording
+    /// alone cannot identify an isolated session while those phases are active.
+    var allowsDesktopOverlayCapture: Bool { scope?.isIsolated != true }
 
     @discardableResult
     mutating func begin(scope: RecordingScope) -> UInt64? {

@@ -170,3 +170,34 @@ Blank-tail checks include the final encoded frame's duration and permit only one
 The broader editor test initially compared its trimmed export with an early wall-clock estimate that excluded picker/Stop latency. It now compares with the source duration exposed by the real editor. That duration check passes, but the exported clip fails its required primary-color marker check; no color assertion was weakened. Retained failing result: `/tmp/zoomit-cr-editor-flow-correct-duration.xcresult`.
 
 The native application hide/restore/quit/relaunch test reached Save but failed its destination check because input dropped lowercase `c` characters in the requested filename. Result: `/tmp/zoomit-cr-native-black-tail.xcresult`. The actual file, `.build/qa-focus/appliation-quit-blak-tail-5002460A-DE60-48E8-8249-92609A88167C.mp4`, was independently decoded using the current `RecordedVideo` implementation: all 771 frames passed selected-app marker, 1.5-second blank-tail, and forbidden-app exclusion assertions. This verifies the stricter assertion against a real recording; the complete native Save-input flow remains failing.
+
+## Stop-frame and delayed-overlay review fixes (2026-10-12)
+
+The writer now retains the required Stop image until the video input accepts it. Finish closes the audio inputs, prevents further realtime appends, and retries video readiness on the writer queue without blocking cancellation. Readiness has a five-second deadline. A missing image, append failure, or readiness timeout reports an error and removes the partial movie rather than exporting old content or substituting a fallback movie.
+
+Static zoom, live zoom, and drawing now check the bound recording scope after their desktop-capture await. Window/application sessions reject those delayed results throughout selection, startup, recording, Stop, editing, and Save, including startup before `isRecording` becomes true. Screen and region recordings retain desktop overlay support.
+
+Standard and App Store self-tests pass with four new real-writer cases: delayed readiness with both audio inputs enabled and a decoded black final frame; bounded readiness failure even when fallback is otherwise enabled; a missing final image; and cancellation during the wait. The scope-state regression covers both isolated scopes through every bound phase and ordinary screen/region support. Both distribution app bundles and the dev bundle were rebuilt.
+
+The first unfiltered native run executed 29 tests: 6 passed and 23 failed. Besides the existing six standalone picker-probe timeouts, all 17 recording tests stopped in setup because the status menu and main menu both contain a Settings item. The status-menu item now has the unique accessibility identifier `settings.open`, and the harness uses it. This resolves the ambiguous selector without changing or weakening recording assertions. First-run evidence: `/tmp/zoomit-final-frame-full-native.xcresult` and `/tmp/zoomit-final-frame-full-native.log`.
+
+The second run was interrupted after 12 completed tests (3 passed, 9 failed); `/tmp/zoomit-final-frame-full-native-retry.log` retains those results, and its result bundle is incomplete. Its application hide/restore/quit/relaunch test reached recording, Stop, editor, and Save. The filename again lost lowercase `c` characters, so the UI test failed its requested-destination check. Independently decoding the actual file, `.build/qa-focus/appliation-quit-blak-tail-CAE4EB3F-765A-44FA-A957-317E1984F4CA.mp4`, with the unchanged `RecordedVideo` assertions passed all 764 frames: selected-app marker, 1.5-second blank tail through the final Stop frame, and forbidden-app exclusion. This verifies the recording artifact, not the failing Save-input flow. Decode evidence: `/tmp/zoomit-final-frame-native-tail.log`.
+
+After cleaning up only the interrupted run's dedicated recorder and fixture executables, both self-test variants passed again on the final source tree. Logs: `/tmp/zoomit-final-frame-standard-final-selftests.log` and `/tmp/zoomit-final-frame-appstore-final-selftests.log`. Dev and sandboxed test bundles passed `codesign --verify --deep --strict`.
+
+The final unfiltered standard native run completed all 29 tests: 8 passed, 21 failed, 0 skipped. Fixture/preflight tests passed 2/2, recorder UI tests passed 2/17, and independent video-assertion tests passed 4/4. The passing recorder cases were application window ordering through exported MP4 assertions and preview mute/unmute accessibility. The six picker-probe tests again timed out accepting native selection. Evidence: `/tmp/zoomit-final-frame-full-native-final.xcresult`, `/tmp/zoomit-final-frame-full-native-final.log`, and `/tmp/zoomit-final-frame-full-native-final-summary.json`.
+
+The other 15 recorder failures were:
+
+| Failure | Cases | First assertion / location |
+| --- | --- | --- |
+| Application still unavailable after reactivation | 1 | `RecordingUITests.swift:250`; before Stop |
+| Save changed requested filename | 2 | `RecordingUITests.swift:123`; app dialogs and selected-display exports |
+| Trimmed export lacks primary-color marker | 1 | `Support/VideoAssertions.swift:83`; same color-shift failure as the earlier editor run |
+| Stop shortcut did not open editor | 1 | `RecordingUITests.swift:71`; desktop has known Control+5 conflicts |
+| Desktop drawing overlay did not appear | 1 | `RecordingUITests.swift:383` |
+| First isolated zoom overlay did not open | 1 | `RecordingUITests.swift:303`; before Stop |
+| Picker cancellation/retry event synthesis timed out | 1 | `RecordingUITests.swift:131` |
+| Settings menu-opening notification timed out | 7 | `Support/TestEnvironment.swift:89`; screen/region, audio, picker shortcuts, sharing withdrawal, and three window cases |
+
+These results do not establish complete native acceptance. Reproduce on an unlocked, quiet test desktop: quit other ZoomIt instances; allow the dedicated recorder/probe and Xcode runner through macOS's permission UI; ensure no stale picker is open; and resolve shortcut conflicts through the test environment or app Settings. Run `zsh Scripts/test-recording-ui.sh --distribution homebrew`, then the corresponding `--distribution appstore` command serially. Check the actual Save filename against the requested name, app restoration before Stop, overlays, and the decoded trim colors; retain failing artifacts instead of relaxing assertions. App Store native runtime, macOS 14, and the device/performance matrix remain pending.
