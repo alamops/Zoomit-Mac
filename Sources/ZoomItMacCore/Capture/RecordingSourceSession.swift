@@ -133,7 +133,7 @@ final class RecordingSourceSession: NSObject, SCStreamOutput, SCStreamDelegate, 
             guard let rendered = context.createCGImage(source, from: source.extent),
                   let copy = CGContext(data: nil, width: rendered.width, height: rendered.height,
                                        bitsPerComponent: 8, bytesPerRow: rendered.width * 4,
-                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+                                       space: RecordingColorSpace.rgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
             copy.draw(rendered, in: CGRect(x: 0, y: 0, width: rendered.width, height: rendered.height))
             guard let owned = copy.makeImage() else { return }
             consume(.complete, image: owned, presentationTime: time, contentRect: footprint)

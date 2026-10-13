@@ -102,7 +102,7 @@ private final class WebcamFrameOutput: NSObject, AVCaptureVideoDataOutputSampleB
         guard let rendered = ciContext.createCGImage(ciImage, from: ciImage.extent),
               let context = CGContext(data: nil, width: rendered.width, height: rendered.height,
                                       bitsPerComponent: 8, bytesPerRow: rendered.width * 4,
-                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+                                      space: RecordingColorSpace.rgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
         context.draw(rendered, in: CGRect(x: 0, y: 0, width: rendered.width, height: rendered.height))
         let image = context.makeImage()
         lock.lock()
