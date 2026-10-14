@@ -78,10 +78,16 @@ enum HotkeyBindings {
     }
 
     static func registrationPlan(settings: AppSettings) -> (bindings: [HotkeyBinding], issues: [String]) {
+        let bindings = all(settings: settings, includeNavigation: true)
+        let navigation = bindings.filter { $0.group == .navigation }
         var accepted: [HotkeyBinding] = []
         var issues: [String] = []
-        for candidate in all(settings: settings) {
-            if let previous = accepted.first(where: { $0.conflicts(with: candidate) }) {
+        for candidate in bindings where candidate.group != .navigation {
+            // Reserve conditional navigation before accepting a new recording
+            // variant, without changing historical collisions for older actions
+            // or registering navigation outside an active Live Zoom session.
+            let reserved = candidate.isNewRecordingVariant ? navigation.first(where: { $0.conflicts(with: candidate) }) : nil
+            if let previous = accepted.first(where: { $0.conflicts(with: candidate) }) ?? reserved {
                 issues.append("\(candidate.actionName) is unavailable because its shortcut is assigned to \(previous.actionName). Change either shortcut in Settings; the menu action remains available.")
             } else { accepted.append(candidate) }
         }
