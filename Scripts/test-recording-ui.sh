@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Native UI tests require full Xcode and an unlocked, English-language macOS login.
+# Native UI tests require macOS 14.2+, full Xcode, and an unlocked English-language login.
 # This wrapper never resets TCC, terminates the installed official app, or substitutes a picker.
 set -euo pipefail
 
@@ -7,6 +7,7 @@ UI_ROOT="${0:A:h:h}"
 UI_MODE="recording"
 UI_DISTRIBUTION="homebrew"
 UI_AUTHORIZATION="normal"
+UI_SHORTCUT_MODE="defaults"
 while (( $# )); do
     case "$1" in
         --preflight) UI_MODE="preflight"; shift ;;
@@ -15,10 +16,12 @@ while (( $# )); do
             (( $# >= 2 )) || { print -u2 "error: --distribution needs homebrew or appstore"; exit 2; }
             UI_DISTRIBUTION="$2"; shift 2 ;;
         --picker-only) UI_AUTHORIZATION="picker-only"; shift ;;
+        --available-shortcuts) UI_SHORTCUT_MODE="control-command"; shift ;;
         --help|-h)
-            print 'Usage: zsh Scripts/test-recording-ui.sh [--preflight | --compatibility] [--distribution homebrew|appstore] [--picker-only]'
+            print 'Usage: zsh Scripts/test-recording-ui.sh [--preflight | --compatibility] [--distribution homebrew|appstore] [--picker-only] [--available-shortcuts]'
             print 'Default: all required native tests, including recording flows when installed by Wave 3.'
             print '--picker-only verifies native capture without a blanket Screen Recording grant for the dedicated probe.'
+            print '--available-shortcuts configures Control+Command bases through the dedicated recorder Settings UI; macOS shortcuts are unchanged.'
             print 'Two-display checks require a second display and fail explicitly when the environment is missing.'
             exit 0 ;;
         *) print -u2 "error: unknown argument $1"; exit 2 ;;
@@ -30,11 +33,16 @@ case "$UI_DISTRIBUTION" in
     *) print -u2 "error: distribution must be homebrew or appstore"; exit 2 ;;
 esac
 if [[ "$(uname -s)" != "Darwin" ]] || ! xcodebuild -version >/dev/null 2>&1; then
-    print -u2 'error: Native recording tests require macOS 14+ and full Xcode. Select it with sudo xcode-select -s /Applications/Xcode.app/Contents/Developer.'
+    print -u2 'error: Native recording tests require macOS 14.2+ and full Xcode. Select it with sudo xcode-select -s /Applications/Xcode.app/Contents/Developer.'
     exit 1
 fi
-UI_MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
-(( UI_MAJOR >= 14 )) || { print -u2 'error: macOS 14 or newer is required.'; exit 1; }
+UI_OS_VERSION="$(sw_vers -productVersion)"
+UI_MAJOR="${UI_OS_VERSION%%.*}"
+UI_MINOR="${UI_OS_VERSION#*.}"
+UI_MINOR="${UI_MINOR%%.*}"
+(( UI_MAJOR > 14 || (UI_MAJOR == 14 && UI_MINOR >= 2) )) || {
+    print -u2 'error: The native window-isolation suite requires macOS 14.2 or newer for child-window exclusion.'; exit 1
+}
 UI_CONSOLE_USER="$(stat -f '%Su' /dev/console)"
 if [[ "$UI_CONSOLE_USER" != "$(id -un)" || "$UI_CONSOLE_USER" == "root" || "$UI_CONSOLE_USER" == "loginwindow" ]]; then
     print -u2 'error: Run the native UI tests as the logged-in desktop user, with the session unlocked. SSH/headless/root sessions are not supported.'
@@ -47,7 +55,10 @@ if ! mkdir "$UI_LOCK" 2>/dev/null; then
     exit 1
 fi
 UI_RUN_DIR="$(mktemp -d "$UI_ROOT/.build/recording-ui/run-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
-UI_DERIVED="$UI_RUN_DIR/DerivedData"
+# Stable build paths preserve the ad-hoc runner's identity between unchanged
+# runs, so an Accessibility grant does not expire solely because paths moved.
+# The run lock serializes both schemes; results and recordings remain per-run.
+UI_DERIVED="$UI_ROOT/.build/recording-ui/DerivedData"
 UI_APP_NAME="ZoomIt Recording Tests ${UI_DISTRIBUTION}.app"
 UI_APP_PATH="$UI_ROOT/.build/$UI_APP_NAME"
 UI_PRODUCTS="$UI_DERIVED/Build/Products/Debug"
@@ -76,7 +87,7 @@ trap 'exit 143' TERM
 print "Native UI artifacts: $UI_RUN_DIR"
 print 'Allow the dedicated test apps/test runner in System Settings > Privacy & Security as requested.'
 print 'Missing Screen Recording, Accessibility, or Automation authorization is an error. Grants must be made through system UI; no test bypasses TCC.'
-print "distribution=$UI_DISTRIBUTION mode=$UI_MODE authorization=$UI_AUTHORIZATION" > "$UI_RUN_DIR/run-environment.txt"
+print "distribution=$UI_DISTRIBUTION mode=$UI_MODE authorization=$UI_AUTHORIZATION shortcuts=$UI_SHORTCUT_MODE" > "$UI_RUN_DIR/run-environment.txt"
 xcodebuild -version >> "$UI_RUN_DIR/run-environment.txt"
 sw_vers >> "$UI_RUN_DIR/run-environment.txt"
 
@@ -116,6 +127,7 @@ if ! xcodebuild test \
     "ZOOMIT_UI_APP_PATH=$UI_APP_PATH" \
     "ZOOMIT_UI_ARTIFACTS=$UI_RUN_DIR" \
     "ZOOMIT_PICKER_AUTHORIZATION=$UI_AUTHORIZATION" \
+    "ZOOMIT_UI_SHORTCUT_MODE=$UI_SHORTCUT_MODE" \
     "${UI_SELECTION[@]}" 2>&1 | tee "$UI_RUN_DIR/xcodebuild.log"; then
     print -u2 "error: native UI checks failed; inspect $UI_RUN_DIR/RecordingUI.xcresult, xcodebuild.log and probe-evidence.json."
     print -u2 'If authorization failed, grant the dedicated bundle and Xcode runner Screen Recording/Accessibility/Automation permission through System Settings, unlock the desktop, and rerun. A missing second display is an unverified required environment, not a passing check.'

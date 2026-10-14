@@ -10,7 +10,15 @@ The original execute-plan coding run did not execute runtime suites. During the 
 
 The previously failing picker fixture-color assertion is fixed. Native capture inherited the display's wide-gamut color profile while recording composition expected sRGB. Isolated recording and the source probe now explicitly request sRGB; the OS-issued filter is retained. On macOS 26.6.2, all six picker compatibility tests passed in the full standard run, and the native trim/export/Save-cancel test passed with the original color thresholds. Both distribution self-test suites pass, including new color-rendering and real writer/trim regressions.
 
-Full native acceptance remains pending. The standard full run completed 29 tests: 14 passed, 15 failed, none skipped. Failures include native filename input, system-reserved default shortcuts, fixture dialog lookup, and Settings/picker UI interference. The complete App Store native run, macOS 14, and optional-device matrix still require passing evidence. A follow-up run with an experimental shortcut profile completed 29 tests: 9 passed, 20 failed, none skipped. Its recording cases failed in setup, and two application-probe cases failed on retry; native compatibility is therefore not consistently green. See the dated color investigation below for retained results. The old `.build/recording-ui/run-20261012-021202-OvEQHO/RecordingUI.xcresult` is historical failing evidence, not the current color status. No required marker, privacy, or lifecycle assertion was weakened.
+Full native acceptance remains pending. The latest completed standard run on 2026-10-13 executed all 29 tests: 26 passed, 3 failed, none skipped. All six picker compatibility tests passed, including the fixture-color assertion, as did all four video-assertion regressions. All recording shortcuts, real native Stop Sharing, screen/region recording, app audio, window ordering, target-loss black tails, and completed Save/export flows passed. Result: `.build/recording-ui/run-20261013-161800-vfWVAR/RecordingUI.xcresult`.
+
+The three failures exposed one production privacy defect and two test defects. The resize export genuinely included an attached orange dialog because native capture includes child windows by default. The stream configuration now explicitly excludes children in window mode and includes them in application mode, with regression checks for both scopes. The real OS-issued filter and the attached-dialog fixture remain intact. Window mode fails safely on macOS 14.0–14.1, which lack the child-exclusion API; it requires macOS 14.2 or later. Application mode retains its macOS 14 minimum.
+
+The other failures were the desktop-overlay query missing a visible unnamed borderless window and a typing assertion sampling before the actual text interval. The test now enumerates the full overlay window snapshot and aligns its unchanged typing interval to the final encoded Stop frame and actual HID Stop request. Offline decoding confirmed the existing exported text reaches a white fraction of 0.01258, above the unchanged baseline-plus-0.0005 threshold. These fixes have passed both distribution self-test suites and both native scheme compile checks; their full native reruns await refreshing Accessibility authorization for the changed signed runner. No required marker, privacy, or lifecycle assertion was weakened.
+
+Earlier full results are retained: `.build/recording-ui/run-20261013-154428-pr2xf0/RecordingUI.xcresult` (20 passed, 9 failed) and `.build/recording-ui/run-20261013-110031-7gBbhp/RecordingUI.xcresult` (21 passed, 8 failed). Their keyboard authorization, region-query, sharing-control, and menu-coordinate failures were repaired and verified by the latest run.
+
+Two earlier attempts stopped before any test case executed while awaiting separate Touch ID/password authentication to **Enable UI Automation**; that authentication subsequently succeeded. Retained startup failures: `.build/recording-ui/run-20261013-134054-LAcMLg/RecordingUI.xcresult` and `.build/recording-ui/run-20261013-134343-6ZSklj/RecordingUI.xcresult`. Both distribution self-tests passed again after the harness repairs, and both XCTest schemes compile. The wrapper now shares a stable DerivedData directory across serial schemes: previously each unique build path changed the ad-hoc runner identity and invalidated Accessibility authorization. The unchanged runner's signing requirement was verified identical after preparing both schemes. Complete native reruns await the real macOS Accessibility grant for this prepared runner. macOS 14 and optional-device/performance checks also remain unverified. Earlier dated failing results below are retained historical evidence.
 
 ### Picker runtime follow-up — 2026-10-12
 
@@ -52,6 +60,13 @@ zsh Scripts/test-recording-ui.sh --distribution homebrew
 zsh Scripts/test-recording-ui.sh --distribution appstore
 ```
 
+On a desktop where macOS reserves the default Control+number shortcuts, run both full suites serially with `--available-shortcuts`. This configures Control+Command bases through the dedicated recorder's actual Settings UI and checks the persisted button titles. It preserves all tests, exercises real global shortcut handlers, and leaves macOS shortcuts unchanged:
+
+```sh
+zsh Scripts/test-recording-ui.sh --distribution homebrew --available-shortcuts
+zsh Scripts/test-recording-ui.sh --distribution appstore --available-shortcuts
+```
+
 `--preflight` checks the fixture/recorder environment and actual picker cancellation/retry. `--compatibility` selects the standalone picker probe tests and fixture checks. `--picker-only` requires that the dedicated probe has no blanket Screen Recording grant; selection must authorize the actual chosen content. The two distribution commands run all required native tests against the corresponding bundled recorder. App Store tests use the real sandbox build, not a compiler flag applied only to the UI runner.
 
 To compile the harness without running interactive tests:
@@ -70,9 +85,11 @@ This compile-only command does not launch the picker or prove runtime permission
 
 ## Environment and permissions
 
-- Use full Xcode with a macOS 14+ SDK and an unlocked, logged-in desktop. Run as the console user. SSH/headless/root sessions do not provide the required interactive environment.
+- Use full Xcode with a macOS 14.2+ SDK and an unlocked, logged-in desktop running macOS 14.2 or later for the complete window/application suite. Run as the console user. SSH/headless/root sessions do not provide the required interactive environment.
 - Use an English test login for the system picker labels. The driver retains accessibility trees and screenshots if native controls cannot be found.
 - Allow the dedicated test apps and Xcode test runner to capture/automate the UI when macOS requests it. Grant permissions through System Settings/system UI. No harness edits the TCC database or silently grants permission.
+- XCTest can separately request Touch ID/password authentication to **Enable UI Automation**. Check every display for that dialog and approve it before the runner's startup timeout. A Screen Recording grant does not satisfy this separate system requirement.
+- Real HID shortcut events additionally require Accessibility permission for `.build/recording-ui/DerivedData/Build/Products/Debug/RecordingUITests-Runner.app`. Add that exact prepared bundle through System Settings. Both schemes share its stable build path; per-run results remain separate. Source or Xcode changes can still require a renewed grant for a changed signed runner.
 - Normal capture tests and picker-only authorization tests have different permission prerequisites. Do not reset an installed official ZoomIt's grants to prepare a test.
 - Two-display acceptance requires a second real or supported virtual display. The suite reports missing display prerequisites as failures with pending-environment evidence; it does not turn required cases into passing skips.
 - Real microphone/webcam checks need configured devices. Deterministic composition tests can use known webcam pixels without a camera, and fixture audio does not need a microphone.
@@ -110,7 +127,7 @@ Every UI failure should retain its screenshots, native accessibility tree where 
 
 ## Acceptance matrix
 
-Run required flows on both macOS 14 and the current supported macOS, and for both distribution variants. Record OS/Xcode versions, display arrangements/scales, bundle identity, permissions, fixture evidence, output file, and pass/fail/pending for each run.
+Run required flows on both macOS 14.2 and the current supported macOS, and for both distribution variants. On macOS 14.0–14.1 verify application recording and the explicit unsupported-window error without starting a window stream. Record OS/Xcode versions, display arrangements/scales, bundle identity, permissions, fixture evidence, output file, and pass/fail/pending for each run.
 
 | Scenario | Expected result | Verification |
 | --- | --- | --- |

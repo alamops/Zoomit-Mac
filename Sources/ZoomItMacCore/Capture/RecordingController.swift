@@ -1139,6 +1139,7 @@ final class RecordingController {
     }
 
     private func startIsolatedStreaming(filter: SCContentFilter, scope: RecordingScope, generation: UInt64) async throws {
+        let configuration = try RecordingColorSpace.makeCaptureConfiguration(for: scope)
         guard let display = displayManager.activeDisplay() else { throw ScreenCaptureError.displayNotFound }
         // contentRect/pointPixelScale come from the actual authorized filter,
         // including opaque macOS 14 picker filters. Never infer a target ID.
@@ -1181,7 +1182,6 @@ final class RecordingController {
             engine.appendSystemAudio(SampleBufferBox(buffer: sample))
         })
         sourceSession = source
-        let configuration = RecordingColorSpace.makeCaptureConfiguration()
         configuration.width = geometry.outputWidth
         configuration.height = geometry.outputHeight
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)

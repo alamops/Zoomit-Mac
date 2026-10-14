@@ -131,6 +131,13 @@ final class PickerProbeDelegate: NSObject, NSApplicationDelegate, SCContentShari
             }
             self.record("authorizedFilter", details: self.metadata)
             let configuration = SCStreamConfiguration()
+            if #available(macOS 14.2, *) {
+                configuration.includeChildWindows = self.requested == "application"
+            } else if self.requested == "window" {
+                self.fail(NSError(domain: "RecordingPickerProbe", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Single-window isolation requires macOS 14.2 or later."]))
+                return
+            }
             // Marker colors are specified in sRGB. An unspecified capture
             // space inherits the display profile, which may be Display P3.
             configuration.colorSpaceName = CGColorSpace.sRGB
@@ -169,6 +176,20 @@ final class PickerProbeDelegate: NSObject, NSApplicationDelegate, SCContentShari
             guard let self, self.stream === stream else { return }
             self.record("terminalError", details: ["message": String(describing: error)])
             self.setStatus("source-stopped")
+        }
+    }
+    @available(macOS 15.2, *)
+    func streamDidBecomeInactive(_ stream: SCStream) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.stream === stream else { return }
+            self.record("nativeInactive")
+        }
+    }
+    @available(macOS 15.2, *)
+    func streamDidBecomeActive(_ stream: SCStream) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.stream === stream else { return }
+            self.record("nativeActive")
         }
     }
     private func consume(_ sample: ProbeSample) {

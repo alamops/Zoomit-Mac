@@ -19,6 +19,9 @@ final class PickerCompatibilityTests: XCTestCase {
     override func tearDownWithError() throws {
         environment?.attachEvidence(to: self, name: name)
         driver?.attachDiagnostics("compatibility-final")
+        if let probe, (try? environment?.evidence()["status"] as? String) == "selecting" {
+            driver?.cancel(from: probe)
+        }
         for app in [probe, a, b].compactMap({ $0 }) where app.state != .notRunning { app.terminate() }
     }
     private func start(_ scope: NativePickerDriver.Scope) throws {
@@ -121,6 +124,9 @@ final class PickerCompatibilityTests: XCTestCase {
         try assertNoForbiddenFrames()
         try RecordingTestEnvironment.click("probe.phase.hidden", in: probe)
         try RecordingTestEnvironment.click("fixture.hide", in: a)
+        try RecordingTestEnvironment.wait(description: "fixture application is actually hidden") {
+            NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == RecordingTestEnvironment.fixtureABundleID }?.isHidden == true
+        }
         try requireLossSignal(phase: "hidden")
         try RecordingTestEnvironment.click("probe.phase.restored", in: probe)
         a.activate()
@@ -161,7 +167,11 @@ final class PickerCompatibilityTests: XCTestCase {
                     || (($0["markers"] as? [String: Double])?["black"] ?? 0) > 0.98
             }) { return true }
             let events = (try? self.environment.evidence()["events"] as? [[String: Any]]) ?? []
-            return events.contains { $0["phase"] as? String == phase && $0["event"] as? String == "terminalError" }
+            // All-window loss can arrive via the native delegate instead of a
+            // frame status. Require an actual OS signal in the marked phase.
+            return events.contains {
+                $0["phase"] as? String == phase && ["terminalError", "nativeInactive"].contains($0["event"] as? String ?? "")
+            }
         }
     }
     private func requireTwoDisplays() throws {

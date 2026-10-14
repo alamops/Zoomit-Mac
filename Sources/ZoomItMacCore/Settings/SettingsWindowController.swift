@@ -637,6 +637,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         )
 
         let hotKeyButton = NSButton(title: zoomHotKeyDisplayString(), target: self, action: #selector(toggleZoomHotKeyRecording(_:)))
+        hotKeyButton.setAccessibilityIdentifier("settings.zoom.shortcut")
         hotKeyButton.bezelStyle = .rounded
         hotKeyButton.setButtonType(.momentaryPushIn)
         hotKeyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
@@ -675,6 +676,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         )
 
         let liveHotKeyButton = NSButton(title: liveHotKeyDisplayString(), target: self, action: #selector(toggleLiveHotKeyRecording(_:)))
+        liveHotKeyButton.setAccessibilityIdentifier("settings.live.shortcut")
         liveHotKeyButton.bezelStyle = .rounded
         liveHotKeyButton.setButtonType(.momentaryPushIn)
         liveHotKeyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
@@ -955,6 +957,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         )
 
         let drawHotKeyButton = NSButton(title: drawHotKeyDisplayString(), target: self, action: #selector(toggleDrawHotKeyRecording(_:)))
+        drawHotKeyButton.setAccessibilityIdentifier("settings.draw.shortcut")
         drawHotKeyButton.bezelStyle = .rounded
         drawHotKeyButton.setButtonType(.momentaryPushIn)
         drawHotKeyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true

@@ -11,6 +11,7 @@ final class RecordingUITests: XCTestCase {
     private var b: XCUIApplication!
     private var picker: NativePickerDriver!
     private var startedAt = Date()
+    private var stopRequestedElapsed: Double?
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -39,10 +40,11 @@ final class RecordingUITests: XCTestCase {
         }
     }
     private func start(_ scope: NativePickerDriver.Scope, shortcut: Bool = false) throws {
+        stopRequestedElapsed = nil
         a.activate()
         if shortcut {
-            let flags: XCUIElement.KeyModifierFlags = scope == .window ? [.control, .option] : [.control, .option, .shift]
-            a.typeKey("5", modifierFlags: flags)
+            let flags = RecordingTestEnvironment.shortcutModifiers.union(scope == .window ? [.option] : [.option, .shift])
+            try RecordingTestEnvironment.globalShortcut("5", modifiers: flags)
         } else {
             try RecordingTestEnvironment.menuAction(scope == .window ? "recording.recordWindow" : "recording.recordApplication", in: recorder)
         }
@@ -65,9 +67,11 @@ final class RecordingUITests: XCTestCase {
         try RecordingTestEnvironment.click(identifier, in: app ?? a)
     }
     private func stop(flags: XCUIElement.KeyModifierFlags? = nil) throws {
+        stopRequestedElapsed = nil
         if let flags {
-            let keyboardApp = a.state == .notRunning ? recorder! : a!
-            keyboardApp.typeKey("5", modifierFlags: flags)
+            let modifiers = flags.union(RecordingTestEnvironment.shortcutModifiers)
+            stopRequestedElapsed = elapsed
+            try RecordingTestEnvironment.globalShortcut("5", modifiers: modifiers)
         }
         else { try RecordingTestEnvironment.menuAction("recording.stop", in: recorder) }
         let editor = recorder.windows["recording.editor"]
@@ -105,7 +109,7 @@ final class RecordingUITests: XCTestCase {
         let pathField = recorder.dialogs.textFields["PathTextField"]
         guard pathField.waitForExistence(timeout: 5) else { throw HarnessError("Native Go to Folder path entry missing") }
         pathField.typeKey("a", modifierFlags: [.command])
-        pathField.typeText(environment.artifacts.path)
+        RecordingTestEnvironment.typeLiteral(environment.artifacts.path, in: pathField)
         guard pathField.value as? String == environment.artifacts.path else {
             throw HarnessError("Native path entry did not accept the requested directory. Actual: \(String(describing: pathField.value)); expected: \(environment.artifacts.path)")
         }
@@ -117,7 +121,7 @@ final class RecordingUITests: XCTestCase {
         guard entry.waitForExistence(timeout: 5) else { throw HarnessError("Native save filename field missing") }
         entry.click()
         entry.typeKey("a", modifierFlags: [.command])
-        entry.typeText(url.lastPathComponent)
+        RecordingTestEnvironment.typeLiteral(url.lastPathComponent, in: entry)
         guard entry.value as? String == url.lastPathComponent else {
             throw HarnessError("Native filename entry did not accept the requested name. Actual: \(String(describing: entry.value)); expected: \(url.lastPathComponent)")
         }
@@ -134,7 +138,7 @@ final class RecordingUITests: XCTestCase {
     func testPickerCancelDuplicateRequestRetryAndEditorCancel() throws {
         try RecordingTestEnvironment.menuAction("recording.recordWindow", in: recorder)
         try state(containing: "Choose a recording target")
-        try picker.typeShortcutDuringSelection("5", flags: [.control, .option, .shift])
+        try picker.typeShortcutDuringSelection("5", flags: RecordingTestEnvironment.shortcutModifiers.union([.option, .shift]))
         try state(containing: "Choose a recording target")
         picker.cancel(from: recorder)
         try ready()
@@ -304,7 +308,7 @@ final class RecordingUITests: XCTestCase {
     }
 
     private func overlay(_ key: String) throws -> XCUIElement {
-        a.typeKey(key, modifierFlags: [.control])
+        try RecordingTestEnvironment.globalShortcut(key, modifiers: RecordingTestEnvironment.shortcutModifiers)
         let canvas = RecordingTestEnvironment.element("recording.isolatedCanvas", in: recorder)
         guard canvas.waitForExistence(timeout: 8) else { throw HarnessError("Isolated \(key) overlay did not open: \(recorder.debugDescription)") }
         try hold(0.8)
@@ -345,7 +349,7 @@ final class RecordingUITests: XCTestCase {
         }
         try state(containing: "Recording Window")
         let liveCanvas = try overlay("4")
-        recorder.typeKey("2", modifierFlags: [.control])
+        try RecordingTestEnvironment.globalShortcut("2", modifiers: RecordingTestEnvironment.shortcutModifiers)
         recorder.typeKey("r", modifierFlags: [])
         stroke(liveCanvas, from: CGVector(dx: 0.4, dy: 0.5), to: CGVector(dx: 0.6, dy: 0.5))
         try hold(1)
@@ -356,9 +360,25 @@ final class RecordingUITests: XCTestCase {
         try movie.requireMarker("red", above: 0.0005)
         try movie.requireMarker("highlight", above: 0.0005)
         let baselineWhite = movie.frames.prefix(3).map { $0.fractions["white", default: 0] }.max() ?? 0
-        let typedFrames = movie.frames.filter { (max(0, textStart - 0.4)...textEnd + 0.4).contains($0.time) }
+        guard let stopRequestedElapsed, stopRequestedElapsed.isFinite, stopRequestedElapsed >= textEnd,
+              let finalPresentationTime = movie.frames.last?.time,
+              finalPresentationTime.isFinite, finalPresentationTime > 0 else {
+            throw HarnessError("Cannot align typing interval without a native shortcut Stop timestamp and final video PTS")
+        }
+        // Isolated Stop appends a final frame at its host-clock stop time. The
+        // writer rebases that same clock to its first frame, whereas startedAt
+        // follows picker/status polling. Align both text marks to the final PTS
+        // without changing the observed interval or its event-delivery margin.
+        let movieTimeOffset = finalPresentationTime - stopRequestedElapsed
+        let movieTextStart = textStart + movieTimeOffset, movieTextEnd = textEnd + movieTimeOffset
+        guard movieTextStart.isFinite, movieTextEnd.isFinite,
+              movieTextStart >= 0, movieTextEnd >= movieTextStart, movieTextEnd <= finalPresentationTime else {
+            throw HarnessError("Native Stop alignment placed the typing interval outside the recorded video")
+        }
+        let typedInterval = max(0, movieTextStart - 0.4)...movieTextEnd + 0.4
+        let typedFrames = movie.frames.filter { typedInterval.contains($0.time) }
         XCTAssertGreaterThan(typedFrames.map { $0.fractions["white", default: 0] }.max() ?? 0, baselineWhite + 0.0005,
-                             "Typing must add visible white glyph pixels above the captured target/title baseline")
+                             "Typing must add visible white glyph pixels above the captured target/title baseline; movie interval \(typedInterval), Stop alignment offset \(movieTimeOffset)s")
         try movie.requireMarker("primary", above: 0.25)
         try movie.exclude(["forbidden", "second", "dialog"])
 
@@ -382,15 +402,25 @@ final class RecordingUITests: XCTestCase {
 
     func testExistingScreenOverlayIsResetBeforeIsolatedSelection() throws {
         a.activate()
-        a.typeKey("2", modifierFlags: [.control])
+        let target = a.windows["Fixture A Primary"].frame
+        try RecordingTestEnvironment.globalShortcut("2", modifiers: RecordingTestEnvironment.shortcutModifiers)
         try hold(1)
         recorder.typeKey("r", modifierFlags: [])
-        let screenOverlay = recorder.windows.firstMatch
-        guard screenOverlay.waitForExistence(timeout: 5) else { throw HarnessError("Existing screen drawing overlay did not appear") }
+        // The unnamed borderless overlay is present in the full AX snapshot
+        // even when macOS's optimized firstMatch lookup cannot resolve it.
+        var drawingWindow: XCUIElement?
+        try RecordingTestEnvironment.wait(timeout: 5, description: "existing screen drawing overlay covering the fixture") {
+            drawingWindow = self.recorder.windows.allElementsBoundByIndex.first { window in
+                let frame = window.frame
+                return frame.width > target.width && frame.height > target.height && frame.contains(target)
+            }
+            return drawingWindow != nil
+        }
+        guard let screenOverlay = drawingWindow else { throw HarnessError("Existing screen drawing overlay did not appear") }
         screenOverlay.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.45)).press(forDuration: 0.2,
             thenDragTo: screenOverlay.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.45)))
         // Use the derived shortcut while the old screen overlay is active.
-        recorder.typeKey("5", modifierFlags: [.control, .option])
+        try RecordingTestEnvironment.globalShortcut("5", modifiers: RecordingTestEnvironment.shortcutModifiers.union([.option]))
         try state(containing: "Choose a recording target")
         try picker.select(scope: .window, targetApp: a, windowTitle: "Fixture A Primary") {
             let status = RecordingTestEnvironment.status(in: self.recorder)
@@ -495,11 +525,30 @@ final class RecordingUITests: XCTestCase {
     func testScreenAndRegionRecordingRegression() throws {
         for region in [false, true] {
             a.activate()
+            let target = a.windows["Fixture A Primary"].frame
             try RecordingTestEnvironment.menuAction(region ? "recording.recordRegion" : "recording.recordScreen", in: recorder)
             if region {
-                let target = a.windows["Fixture A Primary"]
-                target.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.3)).press(forDuration: 0.2,
-                    thenDragTo: target.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.8)))
+                // The borderless selection window has no title or identifier.
+                // On macOS the optimized firstMatch lookup can miss it even
+                // while a full AX snapshot includes the visible main window.
+                var selectionWindow: XCUIElement?
+                try RecordingTestEnvironment.wait(timeout: 8, description: "native region selection overlay covering the fixture") {
+                    selectionWindow = self.recorder.windows.allElementsBoundByIndex.first { window in
+                        let frame = window.frame
+                        return frame.width > target.width && frame.height > target.height && frame.contains(target)
+                    }
+                    return selectionWindow != nil
+                }
+                guard let selector = selectionWindow else { throw HarnessError("Native region selection overlay did not appear") }
+                // Keep the intentional selection overlay as the event target;
+                // use the same absolute rectangle inside the fixture window.
+                let origin = selector.frame.origin
+                let anchor = selector.coordinate(withNormalizedOffset: .zero)
+                let start = anchor.withOffset(CGVector(dx: target.minX + target.width * 0.2 - origin.x,
+                                                       dy: target.minY + target.height * 0.3 - origin.y))
+                let end = anchor.withOffset(CGVector(dx: target.minX + target.width * 0.8 - origin.x,
+                                                     dy: target.minY + target.height * 0.8 - origin.y))
+                start.press(forDuration: 0.2, thenDragTo: end)
             }
             try state(containing: region ? "Recording Region" : "Recording Screen")
             try hold(1.5)

@@ -31,6 +31,9 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var name: String { isB ? "B" : "A" }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Every marker is an independent capture target, regardless of the
+        // login's preference for opening document windows in tabs.
+        NSWindow.allowsAutomaticWindowTabbing = false
         let appMenu = NSMenu()
         let root = NSMenuItem()
         let menu = NSMenu()
@@ -40,6 +43,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApplication.shared.mainMenu = appMenu
         controls = NSWindow(contentRect: NSRect(x: 40, y: 60, width: 330, height: 600),
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        controls.tabbingMode = .disallowed
         controls.title = "Fixture \(name) Controls"
         controls.setAccessibilityIdentifier("fixture.controls")
         controls.isReleasedWhenClosed = false
@@ -84,6 +88,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func makeWindow(_ role: String, frame: NSRect) -> NSWindow {
         let window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
+        window.tabbingMode = .disallowed
         window.title = "Fixture \(name) \(role)"
         window.setAccessibilityIdentifier("fixture.\(role.lowercased())")
         window.isReleasedWhenClosed = false

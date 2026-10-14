@@ -19,9 +19,21 @@ enum RecordingSelfTests {
     }
 
     private static func captureColorContract() throws {
-        let configuration = RecordingColorSpace.makeCaptureConfiguration()
+        let configuration = try RecordingColorSpace.makeCaptureConfiguration(for: .application)
         try expect(configuration.colorSpaceName == CGColorSpace.sRGB && configuration.pixelFormat == kCVPixelFormatType_32BGRA,
                    "isolated capture must request sRGB rather than inheriting a wide-gamut display profile")
+        if #available(macOS 14.2, *) {
+            let window = try RecordingColorSpace.makeCaptureConfiguration(for: .window)
+            try expect(!window.includeChildWindows && configuration.includeChildWindows,
+                       "window capture must exclude attached dialogs while application capture includes them")
+            try expect(window.colorSpaceName == CGColorSpace.sRGB && window.pixelFormat == kCVPixelFormatType_32BGRA,
+                       "window child exclusion must retain the sRGB capture contract")
+        } else {
+            do {
+                _ = try RecordingColorSpace.makeCaptureConfiguration(for: .window)
+                throw SelfTestError.failure("Recording: single-window capture must fail closed without child exclusion")
+            } catch RecordingColorSpace.ConfigurationError.windowIsolationUnavailable { }
+        }
         let geometry = try canvas(64, 48)
         // This is the native fixture's green, whose Display P3 coordinates have
         // a large red component. Gamut extrema alone miss that misinterpretation.

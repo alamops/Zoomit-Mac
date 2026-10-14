@@ -13,6 +13,7 @@
       <EnvironmentVariable key="ZOOMIT_UI_ARTIFACTS" value="$(ZOOMIT_UI_ARTIFACTS)" isEnabled="YES"/>
       <EnvironmentVariable key="ZOOMIT_UI_PRODUCTS" value="$(BUILT_PRODUCTS_DIR)" isEnabled="YES"/>
       <EnvironmentVariable key="ZOOMIT_PICKER_AUTHORIZATION" value="$(ZOOMIT_PICKER_AUTHORIZATION)" isEnabled="YES"/>
+      <EnvironmentVariable key="ZOOMIT_UI_SHORTCUT_MODE" value="$(ZOOMIT_UI_SHORTCUT_MODE)" isEnabled="YES"/>
     </EnvironmentVariables>
   </TestAction>
   <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" allowLocationSimulation="NO"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="0BD5E924536B695023428EE3" BuildableName="Recording Picker Probe.app" BlueprintName="PickerProbe" ReferencedContainer="container:RecordingUI.xcodeproj"/></BuildableProductRunnable></LaunchAction>

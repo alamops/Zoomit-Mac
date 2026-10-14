@@ -84,22 +84,36 @@ final class NativePickerDriver {
         }
     }
     func typeShortcutDuringSelection(_ key: String, flags: XCUIElement.KeyModifierFlags) throws {
-        let controls = systemApps[0].dialogs.firstMatch
-        guard controls.waitForExistence(timeout: 8) else { throw HarnessError("Native picker controls did not appear") }
-        // Keep the intentional chooser as the keyboard event's target so
-        // XCTest's interruption handler cannot cancel it before the shortcut.
-        controls.typeKey(key, modifierFlags: flags)
+        // Posting physical keys avoids an application-target event receipt
+        // after the global handler intentionally changes focus.
+        try RecordingTestEnvironment.globalShortcut(key, modifiers: flags)
     }
+
     func withdrawSharing() throws {
-        let candidates = ["Screen Sharing", "Screen Recording", "Sharing", "Recording"]
-        _ = clickSystemElement(labels: candidates, types: [.menuBarItem, .button, .statusItem], systemOnly: true)
+        if #available(macOS 26.0, *) {
+            // Tahoe exposes capture sessions in Control Center's Audio and
+            // Video Controls status item. The injected window-title button
+            // opens window management, rather than source-sharing controls.
+            guard let indicator = findSystemElement(labels: ["com.apple.menuextra.audiovideo"],
+                                                     types: [.statusItem, .menuBarItem], systemOnly: true) else {
+                attachDiagnostics("system-sharing-indicator-missing")
+                throw HarnessError("The native capture-session status item is unavailable")
+            }
+            indicator.click()
+        } else {
+            guard clickSystemElement(labels: ["Screen Sharing", "Screen Recording", "Sharing", "Recording"],
+                                     types: [.menuBarItem, .button, .statusItem], systemOnly: true) else {
+                throw HarnessError("Native system sharing indicator is unavailable")
+            }
+        }
         do {
             try RecordingTestEnvironment.wait(timeout: 8, description: "system Stop Sharing control") {
-                self.findSystemElement(labels: ["Stop Sharing", "Stop Recording", "Stop"], types: [.button, .menuItem], systemOnly: true) != nil
+                self.findSystemElement(labels: ["Stop Sharing", "Stop Recording", "Stop"], types: [.button, .menuItem], excluding: ["recording.stop"]) != nil
             }
-            guard clickSystemElement(labels: ["Stop Sharing", "Stop Recording", "Stop"], types: [.button, .menuItem], systemOnly: true) else {
+            guard let stop = findSystemElement(labels: ["Stop Sharing", "Stop Recording", "Stop"], types: [.button, .menuItem], excluding: ["recording.stop"]) else {
                 throw HarnessError("OS withdrawal control disappeared")
             }
+            stop.click()
         } catch {
             attachDiagnostics("system-withdrawal-failed")
             throw HarnessError("Cannot withdraw source sharing through Apple's UI on this OS: \(error)")
@@ -109,13 +123,14 @@ final class NativePickerDriver {
         guard let element = findSystemElement(labels: labels, types: types, systemOnly: systemOnly) else { return false }
         element.click(); return true
     }
-    private func findSystemElement(labels: [String], types: [XCUIElement.ElementType], systemOnly: Bool = false) -> XCUIElement? {
+    private func findSystemElement(labels: [String], types: [XCUIElement.ElementType], systemOnly: Bool = false,
+                                   excluding identifiers: [String] = []) -> XCUIElement? {
         let applications = systemOnly ? systemApps : systemApps + requestingApps
-        for app in applications where app.state != .notRunning {
-            for type in types {
-                let descendants = app.descendants(matching: type)
-                for label in labels {
-                    let element = descendants.matching(NSPredicate(format: "label == %@ OR title == %@ OR identifier == %@", label, label, label)).firstMatch
+        for label in labels {
+            for app in applications where app.state != .notRunning {
+                for type in types {
+                    let descendants = app.descendants(matching: type)
+                    let element = descendants.matching(NSPredicate(format: "(label ==[c] %@ OR title ==[c] %@ OR identifier == %@) AND NOT (identifier IN %@)", label, label, label, identifiers)).firstMatch
                     if element.exists && element.isEnabled { return element }
                 }
             }

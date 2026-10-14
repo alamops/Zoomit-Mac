@@ -2,6 +2,9 @@ import AppKit
 import XCTest
 
 struct RecordingTestEnvironment {
+    static var shortcutModifiers: XCUIElement.KeyModifierFlags {
+        ProcessInfo.processInfo.environment["ZOOMIT_UI_SHORTCUT_MODE"] == "control-command" ? [.control, .command] : [.control]
+    }
     static let fixtureABundleID = "com.sysinternals.zoomitmac.recordingtests.fixturea"
     static let fixtureBBundleID = "com.sysinternals.zoomitmac.recordingtests.fixtureb"
     static let probeBundleID = "com.sysinternals.zoomitmac.recordingtests.pickerprobe"
@@ -68,11 +71,18 @@ struct RecordingTestEnvironment {
         element("recording.statusIndicator", in: recorder).label
     }
     static func menuAction(_ identifier: String, in recorder: XCUIApplication) throws {
+        // Resolve the status item's position after foreground/menu-bar layout
+        // changes, rather than clicking a coordinate from the previous app.
+        recorder.activate()
         let indicator = element("recording.statusIndicator", in: recorder)
         guard indicator.waitForExistence(timeout: 10) else { throw HarnessError("Recorder's menu bar indicator is unavailable; allow Accessibility and ensure the menu bar is visible. \(recorder.debugDescription)") }
         indicator.click()
         let item = recorder.menuItems[identifier]
-        guard item.waitForExistence(timeout: 5), item.isEnabled else {
+        do {
+            try wait(timeout: 5, description: "recorder menu is visibly open for \(identifier)") {
+                item.exists && item.isEnabled && item.frame.width > 0 && item.frame.height > 0
+            }
+        } catch {
             recorder.typeKey(.escape, modifierFlags: [])
             throw HarnessError("Recorder menu action \(identifier) is unavailable. \(recorder.debugDescription)")
         }
@@ -81,15 +91,31 @@ struct RecordingTestEnvironment {
     static func configureRecorder(_ recorder: XCUIApplication, systemAudio: Bool = false) throws {
         let title = "ZoomIt - Sysinternals: www.sysinternals.com"
         if !recorder.windows[title].exists {
-            let indicator = element("recording.statusIndicator", in: recorder)
-            guard indicator.waitForExistence(timeout: 10) else { throw HarnessError("Recorder did not expose its status item") }
-            indicator.click()
-            let settings = recorder.menuItems["settings.open"]
-            guard settings.waitForExistence(timeout: 5) else { throw HarnessError("Settings menu inaccessible: \(recorder.debugDescription)") }
-            settings.click()
+            // Use the shipped Settings menu shortcut rather than opening a
+            // second menu while a system sharing popover is unwinding.
+            recorder.activate()
+            recorder.typeKey(",", modifierFlags: [.command])
         }
         let settingsWindow = recorder.windows[title]
         guard settingsWindow.waitForExistence(timeout: 8) else { throw HarnessError("Recorder Settings did not open") }
+        for (pane, identifier, key) in [("Zoom", "settings.zoom.shortcut", "1"),
+                                        ("Live Zoom", "settings.live.shortcut", "4"),
+                                        ("Draw", "settings.draw.shortcut", "2"),
+                                        ("Record", "settings.record.shortcut", "5")] {
+            let sidebar = settingsWindow.staticTexts[pane].firstMatch
+            guard sidebar.waitForExistence(timeout: 5) else { throw HarnessError("Missing Settings pane \(pane)") }
+            sidebar.click()
+            let button = recorder.buttons[identifier]
+            guard button.waitForExistence(timeout: 5) else { throw HarnessError("Missing shortcut recorder \(identifier)") }
+            let expected = (shortcutModifiers.contains(.command) ? "⌃⌘" : "⌃") + key
+            // AppKit exposes the button's text as AXTitle rather than AXLabel.
+            let configured = recorder.buttons.matching(NSPredicate(format: "identifier == %@ AND title == %@", identifier, expected)).firstMatch
+            if !configured.exists {
+                button.click()
+                settingsWindow.typeKey(key, modifierFlags: shortcutModifiers)
+                try wait(description: "Settings persists \(identifier)=\(expected)") { configured.exists }
+            }
+        }
         let recordPane = settingsWindow.staticTexts["Record"].firstMatch
         guard recordPane.waitForExistence(timeout: 5) else { throw HarnessError("Record Settings sidebar missing: \(settingsWindow.debugDescription)") }
         recordPane.click()
@@ -139,6 +165,38 @@ struct RecordingTestEnvironment {
             throw HarnessError("Cannot use \(identifier). Ensure the desktop is unlocked and allow Xcode's test runner in Privacy & Security > Accessibility and Automation. UI: \(app.debugDescription)")
         }
         button.click()
+    }
+    static func globalShortcut(_ key: String, modifiers: XCUIElement.KeyModifierFlags) throws {
+        guard CGPreflightPostEventAccess() else {
+            throw HarnessError("Allow keyboard event posting for the native test runner in Accessibility settings")
+        }
+        let keyCodes: [String: CGKeyCode] = ["1": 18, "2": 19, "4": 21, "5": 23]
+        guard let code = keyCodes[key], let source = CGEventSource(stateID: .privateState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else {
+            throw HarnessError("Cannot construct native global shortcut \(key)")
+        }
+        var flags: CGEventFlags = []
+        for (modifier, flag) in [(XCUIElement.KeyModifierFlags.control, CGEventFlags.maskControl),
+                                 (.command, .maskCommand), (.shift, .maskShift), (.option, .maskAlternate)] {
+            if modifiers.contains(modifier) { flags.insert(flag) }
+        }
+        // These real HID events traverse the product's global hotkey handler.
+        // XCTest application-target typing waits for the old app to acknowledge
+        // input even after a successful shortcut has moved focus to the picker,
+        // editor, or isolated presentation, causing a false synthesis timeout.
+        down.flags = flags; up.flags = flags
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+    static func typeLiteral(_ text: String, in element: XCUIElement) {
+        // Bulk text synthesis can drop lowercase c with US International-PC.
+        // Emit that character as a discrete key; callers still verify the
+        // complete, unchanged filename/path before accepting native Save.
+        for (index, part) in text.components(separatedBy: "c").enumerated() {
+            if index > 0 { element.typeKey("c", modifierFlags: []) }
+            if !part.isEmpty { element.typeText(part) }
+        }
     }
     static func wait(timeout: TimeInterval = 10, description: String, condition: @escaping () -> Bool) throws {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
