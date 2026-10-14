@@ -4,11 +4,23 @@ This feature adds native target selection, isolated zoom/drawing/webcam composit
 
 ## Verification status
 
+Current status is based on the retained standard run from 2026-10-13 on macOS 26.6.2: `.build/recording-ui/run-20261013-161800-vfWVAR/RecordingUI.xcresult`. This run predates the final child-dialog exclusion and overlay-test repairs. Its finalized result is:
+
+| Native test layer | Passed | Failed | Skipped |
+| --- | --- | --- | --- |
+| Fixture/preflight | 2 | 0 | 0 |
+| Picker compatibility, including required fixture-color assertions | 6 | 0 | 0 |
+| Recording UI/export | 14 | 3 | 0 |
+| Video-assertion regressions | 4 | 0 | 0 |
+| Total | 26 | 3 | 0 |
+
+**Picker fixture-color validation passed; full native acceptance remains pending.** Earlier reports that the picker still fails its fixture-color assertion describe superseded results. The three failures in this run were the desktop-overlay window query, typing interval alignment, and attached-dialog inclusion in a window export. Their repairs passed self-tests and compile checks; the repaired source still needs complete standard and App Store native reruns after renewing the test runner's Accessibility grant. The same result and remaining verification scope should be used in the PR description.
+
 The execute-plan run implements application code, deterministic self-tests, native XCTest UI tests, fixtures, and assertion helpers. Compile checks are separate from executing the tests. Standard and App Store app builds and both XCTest schemes’ build-for-testing checks passed. The development app bundle was built and its signature verified. Checkpoint details are recorded in the plan execution log.
 
 The original execute-plan coding run did not execute runtime suites. During the subsequent review-fix run on 2026-10-12, both standard and App Store self-test suites passed, and both independent `VideoAssertionsTests` passed against real MP4s. Those two tests also failed against the old frame-sampling implementation, proving the regression checks detect single-frame leaks and blank-tail interruptions.
 
-The previously failing picker fixture-color assertion is fixed. Native capture inherited the display's wide-gamut color profile while recording composition expected sRGB. Isolated recording and the source probe now explicitly request sRGB; the OS-issued filter is retained. On macOS 26.6.2, all six picker compatibility tests passed in the full standard run, and the native trim/export/Save-cancel test passed with the original color thresholds. Both distribution self-test suites pass, including new color-rendering and real writer/trim regressions.
+Native capture previously inherited the display's wide-gamut color profile while recording composition expected sRGB. Isolated recording and the source probe now explicitly request sRGB; the OS-issued filter is retained. In the cited run, all six picker compatibility tests and the native trim/export/Save-cancel test passed with their original color thresholds. Both distribution self-test suites pass, including color-rendering and real writer/trim regressions.
 
 Full native acceptance remains pending. The latest completed standard run on 2026-10-13 executed all 29 tests: 26 passed, 3 failed, none skipped. All six picker compatibility tests passed, including the fixture-color assertion, as did all four video-assertion regressions. All recording shortcuts, real native Stop Sharing, screen/region recording, app audio, window ordering, target-loss black tails, and completed Save/export flows passed. Result: `.build/recording-ui/run-20261013-161800-vfWVAR/RecordingUI.xcresult`.
 
@@ -21,6 +33,8 @@ Earlier full results are retained: `.build/recording-ui/run-20261013-154428-pr2x
 Two earlier attempts stopped before any test case executed while awaiting separate Touch ID/password authentication to **Enable UI Automation**; that authentication subsequently succeeded. Retained startup failures: `.build/recording-ui/run-20261013-134054-LAcMLg/RecordingUI.xcresult` and `.build/recording-ui/run-20261013-134343-6ZSklj/RecordingUI.xcresult`. Both distribution self-tests passed again after the harness repairs, and both XCTest schemes compile. The wrapper now shares a stable DerivedData directory across serial schemes: previously each unique build path changed the ad-hoc runner identity and invalidated Accessibility authorization. The unchanged runner's signing requirement was verified identical after preparing both schemes. Complete native reruns await the real macOS Accessibility grant for this prepared runner. macOS 14 and optional-device/performance checks also remain unverified. Earlier dated failing results below are retained historical evidence.
 
 ### Picker runtime follow-up — 2026-10-12
+
+Historical run notes: failures and pending checks in this dated section describe that run. Use the Verification status above for the latest retained results.
 
 The reported missing picker and disappearing Wi-Fi/menu items coincided with a Control Center crash. Closed or unrealized AppKit windows can report `windowNumber == -1`; exclusions now retain only valid CGWindowIDs. Presentation is deferred until menu tracking unwinds, and Control Center was relaunched after the earlier crash to restore the system picker service.
 
@@ -172,6 +186,8 @@ Window and application recording use the same configured Record Toggle base. Shi
 
 ## Application window ordering investigation (2026-10-12)
 
+Historical investigation: the later native source-order and exported window-order tests passed in the run cited under Verification status.
+
 The new focus fixtures use equally sized overlapping windows and alternate real pointer clicks between their exposed sides. The native source test checks newly captured color markers after each click; the exported-video test requires the corresponding stable window-order sequence and excludes fixture B throughout. A main-window label separately confirms that each click reached the intended app window.
 
 On macOS 26.6.2, `testApplicationWindowClicksChangeRecordedStackingOrder` passed for the standard recorder: native app selection, primary/second/primary pointer clicks, Stop, editor, native Save, decoded MP4 ordering, and exclusion of fixture B in every decoded frame. Result: `/tmp/zoomit-focus-native-edit-menu.xcresult`; saved footage: `.build/qa-focus/app-window-order-9AFA62BB-853D-49ED-A00E-BBAD580247E4.mp4`. The Save destination was selected through `/tmp/zoomit-qa-order`, a symlink to the test-owned artifact directory, to avoid the earlier desktop path-entry interference. Standard and App Store self-tests passed. App Store native focus acceptance and macOS 14 remain pending.
@@ -182,6 +198,8 @@ The owner initially reported the issue during ordinary application recording, th
 
 ## Review-comment fixes (2026-10-12)
 
+Historical run notes: the color and Save-input failures below were subsequently repaired and passed in the run cited under Verification status.
+
 The preview mute button now updates its accessibility action on every volume synchronization. Recorder transitions block Break Timer, all DemoMirror scopes, and standard-build DemoType start/reset commands, while recording stop and exit handling remains reachable. Self-tests cover all five protected phases and normal idle/recording behavior in both product variants.
 
 Blank-tail checks include the final encoded frame's duration and permit only one observed cadence interval plus a one-microsecond timestamp epsilon. Cadence uses the median positive presentation interval: a final Stop frame can arrive only 1/600 second after the previous frame without changing the video's normal 30 fps cadence. Four independent video-assertion tests pass, including short tails at 30/60 fps and this closely spaced final-frame case. The short-interval case first failed with the minimum-interval calculation, then passed with the median calculation. The native mute/unmute/mute accessibility test also passed. Combined result: `/tmp/zoomit-cr-final-regressions.xcresult`. Standard and App Store self-tests passed, and the dev bundle was rebuilt.
@@ -191,6 +209,8 @@ The broader editor test initially compared its trimmed export with an early wall
 The native application hide/restore/quit/relaunch test reached Save but failed its destination check because input dropped lowercase `c` characters in the requested filename. Result: `/tmp/zoomit-cr-native-black-tail.xcresult`. The actual file, `.build/qa-focus/appliation-quit-blak-tail-5002460A-DE60-48E8-8249-92609A88167C.mp4`, was independently decoded using the current `RecordedVideo` implementation: all 771 frames passed selected-app marker, 1.5-second blank-tail, and forbidden-app exclusion assertions. This verifies the stricter assertion against a real recording; the complete native Save-input flow remains failing.
 
 ## Stop-frame and delayed-overlay review fixes (2026-10-12)
+
+Historical run notes: the dated failure counts below are retained evidence, superseded by the result under Verification status.
 
 The writer now retains the required Stop image until the video input accepts it. Finish closes the audio inputs, prevents further realtime appends, and retries video readiness on the writer queue without blocking cancellation. Readiness has a five-second deadline. A missing image, append failure, or readiness timeout reports an error and removes the partial movie rather than exporting old content or substituting a fallback movie.
 
@@ -222,6 +242,8 @@ The other 15 recorder failures were:
 These results do not establish complete native acceptance. Reproduce on an unlocked, quiet test desktop: quit other ZoomIt instances; allow the dedicated recorder/probe and Xcode runner through macOS's permission UI; ensure no stale picker is open; and resolve shortcut conflicts through the test environment or app Settings. Run `zsh Scripts/test-recording-ui.sh --distribution homebrew`, then the corresponding `--distribution appstore` command serially. Check the actual Save filename against the requested name, app restoration before Stop, overlays, and the decoded trim colors; retain failing artifacts instead of relaxing assertions. App Store native runtime, macOS 14, and the device/performance matrix remain pending.
 
 ## Picker color investigation and native retest (2026-10-13)
+
+Historical investigation: these experiments preceded the latest retained full run. Their failed setup attempts and then-unshipped workarounds are recorded as they stood at that time; the current harness and validation state are described under Verification status and Local commands above.
 
 The original authorized probe received 255 window frames but its required primary marker peaked at 0.038452, below the unchanged 0.2 threshold. The display uses Display P3: the fixture's sRGB green `(13, 217, 26)` has roughly `(100, 214, 69)` coordinates in P3. Misinterpreting those coordinates as sRGB explained both the probe failure and the yellow-green trimmed export. Requesting sRGB at the native capture boundary fixes the source rather than changing the assertion.
 

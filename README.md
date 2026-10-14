@@ -111,6 +111,8 @@ Press the OCR shortcut (`Control+Option+6`) and drag a rectangle to recognize th
 
 Choose **Record Screen**, **Record Region…**, **Record Window…**, or **Record Application…** from the menu bar, or use the recording shortcuts. Window and application recording open Apple's system picker. Window mode captures one window; application mode captures that app's windows and dialogs on the selected display. Stop with **Stop Recording** or any recording shortcut.
 
+Window recording requires macOS 14.2 or later to exclude attached child dialogs. Application recording remains available on macOS 14.0 and later.
+
 Window/application recordings render static zoom, live zoom, drawing, and typing directly onto the selected content. The interactive zoom/draw canvas shows that content fitted to the presentation display. Existing screen annotations are cleared before target selection. Webcam picture-in-picture stays fixed in the recorded viewport as the content zooms. Screen/region recordings retain their screen-overlay capture behavior.
 
 The isolated live canvas shows updating content and captures mouse input. Press Escape to dismiss it and interact directly with the selected app while recording continues.
