@@ -49,8 +49,15 @@ final class AppController: NSObject {
     }
 
     @objc func toggleRecording() {
-        modeCoordinator.handle(.toggleRecording(region: false))
+        modeCoordinator.handle(.toggleRecording(scope: .screen))
     }
+
+    var recordingSessionState: RecordingSessionState { modeCoordinator.recordingSessionState }
+
+    @objc func toggleRecordingRegion() { modeCoordinator.handle(.toggleRecording(scope: .region)) }
+    @objc func toggleRecordingWindow() { modeCoordinator.handle(.toggleRecording(scope: .window)) }
+    @objc func toggleRecordingApplication() { modeCoordinator.handle(.toggleRecording(scope: .application)) }
+    @objc func stopRecording() { modeCoordinator.handle(.stopRecording) }
 
     @objc func startPanorama() {
         modeCoordinator.handle(.startPanorama(save: false))

@@ -33,7 +33,7 @@ brew uninstall --cask zoomit
 - Viewport screenshot copy/save and region snip copy/save.
 - OCR snip: select a screen region and copy its recognized text to the clipboard.
 - Break timer with a configurable countdown, colors, opacity, background, and optional sound.
-- MP4 screen recording for the whole screen or a selected region, with optional system audio, microphone audio, and fixed webcam picture-in-picture.
+- MP4 recording of the whole screen, a selected region, one window, or one application, with zoom/drawing, optional audio, and fixed webcam picture-in-picture.
 - Post-recording video editor with preview, trim, append, fades, playback controls, volume mute/slider, and export before save.
 - Scrolling panorama capture with alignment, fixed header/footer suppression, progress, cancellation, and copy/save output.
 - Tabbed Settings dialog for hotkeys, zoom, draw, type, snip, record, webcam, panorama, and launch-at-login preferences.
@@ -54,7 +54,9 @@ swift run ZoomItMacSelfTest
 swift run ZoomIt
 ```
 
-The self-test covers viewport math, annotation lifecycle/rendering, settings persistence, and panorama stitcher regressions.
+The self-test covers viewport math, annotation lifecycle/rendering, settings persistence, panorama stitching, recording geometry/source lifecycle/composition, and recording shortcut conflicts.
+
+Native recording UI tests use XCTest, real fixture applications, and Apple's content-sharing picker. They require full Xcode and an unlocked macOS desktop. See [recording test setup and acceptance checks](docs/testing/window-application-recording.md).
 
 Run the sandbox product-surface tests with the App Store compiler condition:
 
@@ -81,6 +83,8 @@ The contributor build is named `ZoomIt (Dev).app` (bundle id `com.sysinternals.z
 | Live zoom | `Control+4` |
 | Record screen | `Control+5` |
 | Record region | `Control+Shift+5` |
+| Record window | `Control+Option+5` |
+| Record application | `Control+Option+Shift+5` |
 | Snip region to clipboard | `Control+6` |
 | Snip region to file | `Control+Shift+6` |
 | OCR region to clipboard | `Control+Option+6` |
@@ -105,7 +109,19 @@ Press the OCR shortcut (`Control+Option+6`) and drag a rectangle to recognize th
 
 ## Recording
 
-Recording uses ScreenCaptureKit and AVAssetWriter. Static zoom and drawing overlays are captured even when ScreenCaptureKit omits ZoomIt's own windows; live zoom remains excluded from its own capture to avoid feedback. Webcam picture-in-picture stays fixed in the recorded viewport and is composited into overlay recordings instead of being zoomed into the source image.
+Choose **Record Screen**, **Record Region…**, **Record Window…**, or **Record Application…** from the menu bar, or use the recording shortcuts. Window and application recording open Apple's system picker. Window mode captures one window; application mode captures that app's windows and dialogs on the selected display. Stop with **Stop Recording** or any recording shortcut.
+
+Window recording requires macOS 14.2 or later to exclude attached child dialogs. Application recording remains available on macOS 14.0 and later.
+
+Window/application recordings render static zoom, live zoom, drawing, and typing directly onto the selected content. The interactive zoom/draw canvas shows that content fitted to the presentation display. Existing screen annotations are cleared before target selection. Webcam picture-in-picture stays fixed in the recorded viewport as the content zooms. Screen/region recordings retain their screen-overlay capture behavior.
+
+The isolated live canvas shows updating content and captures mouse input. Press Escape to dismiss it and interact directly with the selected app while recording continues.
+
+Video dimensions stay fixed for each clip. A resized window is fitted into the original canvas with black padding, and window capture follows the selected window across displays. Application capture stays on its selected display. If the target is hidden, minimized, closed, or quits, recording continues with black target content until you stop it; enabled webcam and microphone continue. Hidden content can return through the same capture selection. A closed window or quit application is not automatically replaced by a new window or relaunched app.
+
+With audio enabled, window/application recording captures the selected app's audio. Audio is scoped to the application, so a recording of one browser window can include sound from that browser's other windows. Microphone audio remains optional. Screen/region recordings use system audio.
+
+All four recording shortcuts derive from the configurable Record Toggle shortcut: toggle Shift for region, Option for window, or both for application. Settings shows the exact combinations and any unavailable shortcuts. Existing shortcuts keep precedence if a new recording variant conflicts; its menu action remains available.
 
 When recording stops, ZoomItMac opens the built-in editor before the save panel so the clip can be trimmed, appended to another clip, faded, muted, and exported.
 

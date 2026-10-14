@@ -57,6 +57,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     // Record tab controls.
     private weak var microphonePopup: NSPopUpButton?
     private weak var noiseCancellationCheckbox: NSButton?
+    private weak var recordShortcutVariantsLabel: NSTextField?
+    private weak var hotkeyIssueLabel: NSTextField?
 
     // Snip tab controls.
     private weak var snipSaveDirectoryField: NSTextField?
@@ -150,6 +152,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         snipHotKeyButton?.title = snipHotKeyDisplayString()
         snipOcrHotKeyButton?.title = snipOcrHotKeyDisplayString()
         recordHotKeyButton?.title = recordHotKeyDisplayString()
+        updateRecordingShortcutHelp()
         #if !ZOOMIT_APP_STORE
         demoTypeHotKeyButton?.title = demoTypeHotKeyDisplayString()
         #endif
@@ -634,6 +637,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         )
 
         let hotKeyButton = NSButton(title: zoomHotKeyDisplayString(), target: self, action: #selector(toggleZoomHotKeyRecording(_:)))
+        hotKeyButton.setAccessibilityIdentifier("settings.zoom.shortcut")
         hotKeyButton.bezelStyle = .rounded
         hotKeyButton.setButtonType(.momentaryPushIn)
         hotKeyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
@@ -672,6 +676,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         )
 
         let liveHotKeyButton = NSButton(title: liveHotKeyDisplayString(), target: self, action: #selector(toggleLiveHotKeyRecording(_:)))
+        liveHotKeyButton.setAccessibilityIdentifier("settings.live.shortcut")
         liveHotKeyButton.bezelStyle = .rounded
         liveHotKeyButton.setButtonType(.momentaryPushIn)
         liveHotKeyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
@@ -777,189 +782,68 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         let newCode = Int(event.keyCode)
         let newModifiers = modifiers.rawValue
 
-        switch recordingTarget {
+        guard let target = recordingTarget else { return nil }
+        var candidate = settings
+        let group: HotkeyBinding.Group
+        switch target {
         case .zoom:
-            // Reject a shortcut already assigned to another ZoomIt hotkey.
-            if conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.hotKeyCode = newCode
-            settings.hotKeyModifiers = newModifiers
+            candidate.hotKeyCode = newCode
+            candidate.hotKeyModifiers = newModifiers
+            group = .zoom
         case .draw:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.drawHotKeyCode = newCode
-            settings.drawHotKeyModifiers = newModifiers
+            candidate.drawHotKeyCode = newCode
+            candidate.drawHotKeyModifiers = newModifiers
+            group = .draw
         case .live:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.liveHotKeyCode = newCode
-            settings.liveHotKeyModifiers = newModifiers
+            candidate.liveHotKeyCode = newCode
+            candidate.liveHotKeyModifiers = newModifiers
+            group = .live
         case .breakTimer:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithSnip(code: newCode, modifiers: newModifiers) ||
-                conflictsWithRecord(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithPanorama(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.breakHotKeyCode = newCode
-            settings.breakHotKeyModifiers = newModifiers
+            candidate.breakHotKeyCode = newCode
+            candidate.breakHotKeyModifiers = newModifiers
+            group = .breakTimer
         case .snip:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.snipHotKeyCode = newCode
-            settings.snipHotKeyModifiers = newModifiers
+            candidate.snipHotKeyCode = newCode
+            candidate.snipHotKeyModifiers = newModifiers
+            group = .snip
         case .snipOcr:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithSnip(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.snipOcrHotKeyCode = newCode
-            settings.snipOcrHotKeyModifiers = newModifiers
+            candidate.snipOcrHotKeyCode = newCode
+            candidate.snipOcrHotKeyModifiers = newModifiers
+            group = .snipOcr
         case .record:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.recordHotKeyCode = newCode
-            settings.recordHotKeyModifiers = newModifiers
+            candidate.recordHotKeyCode = newCode
+            candidate.recordHotKeyModifiers = newModifiers
+            group = .record
         #if !ZOOMIT_APP_STORE
         case .demoType:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithSnip(code: newCode, modifiers: newModifiers) ||
-                conflictsWithSnipOcr(code: newCode, modifiers: newModifiers) ||
-                conflictsWithRecord(code: newCode, modifiers: newModifiers) ||
-                conflictsWithPanorama(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.demoTypeHotKeyCode = newCode
-            settings.demoTypeHotKeyModifiers = newModifiers
+            candidate.demoTypeHotKeyCode = newCode
+            candidate.demoTypeHotKeyModifiers = newModifiers
+            group = .demoType
         #endif
         case .panorama:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoMirror(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.panoramaHotKeyCode = newCode
-            settings.panoramaHotKeyModifiers = newModifiers
+            candidate.panoramaHotKeyCode = newCode
+            candidate.panoramaHotKeyModifiers = newModifiers
+            group = .panorama
         case .demoMirror:
-            if conflictsWithZoom(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDraw(code: newCode, modifiers: newModifiers) ||
-                conflictsWithLive(code: newCode, modifiers: newModifiers) ||
-                conflictsWithBreak(code: newCode, modifiers: newModifiers) ||
-                conflictsWithSnip(code: newCode, modifiers: newModifiers) ||
-                conflictsWithSnipOcr(code: newCode, modifiers: newModifiers) ||
-                conflictsWithRecord(code: newCode, modifiers: newModifiers) ||
-                conflictsWithDemoType(code: newCode, modifiers: newModifiers) ||
-                conflictsWithPanorama(code: newCode, modifiers: newModifiers) {
-                NSSound.beep()
-                return nil
-            }
-            settings.demoMirrorHotKeyCode = newCode
-            settings.demoMirrorHotKeyModifiers = newModifiers
-        case nil:
+            candidate.demoMirrorHotKeyCode = newCode
+            candidate.demoMirrorHotKeyModifiers = newModifiers
+            group = .demoMirror
+        }
+        if let (binding, other) = HotkeyBindings.conflict(settings: candidate, editedGroup: group) {
+            finishRecording()
+            let alert = NSAlert()
+            alert.messageText = "Shortcut conflicts with \(other.actionName)"
+            let shortcut = Self.describe(keyCode: binding.keyCode, modifiers: NSEvent.ModifierFlags(rawValue: binding.modifiers))
+            alert.informativeText = "\(binding.actionName) and \(other.actionName) both use \(shortcut). Choose a different shortcut. Derived Shift and Option shortcuts are checked too."
+            alert.runModal()
             return nil
         }
+        settings = candidate
         persist()
         finishRecording()
         onHotKeyChange()
+        updateRecordingShortcutHelp()
         return nil
-    }
-
-    private func conflictsWithZoom(code: Int, modifiers: UInt) -> Bool {
-        code == settings.hotKeyCode && modifiers == settings.hotKeyModifiers
-    }
-
-    private func conflictsWithDraw(code: Int, modifiers: UInt) -> Bool {
-        code == settings.drawHotKeyCode && modifiers == settings.drawHotKeyModifiers
-    }
-
-    private func conflictsWithLive(code: Int, modifiers: UInt) -> Bool {
-        code == settings.liveHotKeyCode && modifiers == settings.liveHotKeyModifiers
-    }
-
-    private func conflictsWithBreak(code: Int, modifiers: UInt) -> Bool {
-        code == settings.breakHotKeyCode && modifiers == settings.breakHotKeyModifiers
-    }
-
-    private func conflictsWithSnip(code: Int, modifiers: UInt) -> Bool {
-        code == settings.snipHotKeyCode && modifiers == settings.snipHotKeyModifiers
-    }
-
-    private func conflictsWithSnipOcr(code: Int, modifiers: UInt) -> Bool {
-        settings.snipOcrHotKeyCode != 0 &&
-            code == settings.snipOcrHotKeyCode && modifiers == settings.snipOcrHotKeyModifiers
-    }
-
-    private func conflictsWithRecord(code: Int, modifiers: UInt) -> Bool {
-        code == settings.recordHotKeyCode && modifiers == settings.recordHotKeyModifiers
-    }
-
-    private func conflictsWithDemoType(code: Int, modifiers: UInt) -> Bool {
-        #if ZOOMIT_APP_STORE
-        false
-        #else
-        settings.demoTypeHotKeyCode != 0 &&
-            code == settings.demoTypeHotKeyCode && modifiers == settings.demoTypeHotKeyModifiers
-        #endif
-    }
-
-    private func conflictsWithPanorama(code: Int, modifiers: UInt) -> Bool {
-        code == settings.panoramaHotKeyCode && modifiers == settings.panoramaHotKeyModifiers
-    }
-
-    private func conflictsWithDemoMirror(code: Int, modifiers: UInt) -> Bool {
-        code == settings.demoMirrorHotKeyCode && modifiers == settings.demoMirrorHotKeyModifiers
     }
 
     private func finishRecording() {
@@ -982,6 +866,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         snipHotKeyButton?.title = snipHotKeyDisplayString()
         snipOcrHotKeyButton?.title = snipOcrHotKeyDisplayString()
         recordHotKeyButton?.title = recordHotKeyDisplayString()
+        updateRecordingShortcutHelp()
         #if !ZOOMIT_APP_STORE
         demoTypeHotKeyButton?.title = demoTypeHotKeyDisplayString()
         #endif
@@ -1072,6 +957,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         )
 
         let drawHotKeyButton = NSButton(title: drawHotKeyDisplayString(), target: self, action: #selector(toggleDrawHotKeyRecording(_:)))
+        drawHotKeyButton.setAccessibilityIdentifier("settings.draw.shortcut")
         drawHotKeyButton.bezelStyle = .rounded
         drawHotKeyButton.setButtonType(.momentaryPushIn)
         drawHotKeyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
@@ -1423,9 +1309,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
     private func makeRecordTab() -> NSView {
         let help = makeLabel(
             """
-            Press the record shortcut to record the whole screen to an MP4 file; hold Shift with the shortcut to drag a rectangle and record just that region. Press the shortcut again to stop, then choose where to save the recording.
+            Record a screen or region, or use the system picker to record one window or one application on a display. Any recording shortcut stops an active recording; Stop Recording is also available in the menu.
 
-            Enable system audio to capture what you hear, and choose a microphone to also record your voice. Microphone recording requires the bundled app and microphone permission.
+            Window/application recordings render zoom, drawing, typing and optional webcam directly onto isolated content. The live canvas captures mouse input; press Escape to interact directly with the app while recording continues. Video size stays fixed. If the target hides, closes or quits, black target content continues until you stop; enabled webcam and microphone continue.
+
+            System audio in window/application mode includes only the selected app, including sound from its other windows (for example another browser window). Optional microphone recording requires microphone permission.
             """,
             wraps: true
         )
@@ -1435,13 +1323,26 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         recordHotKeyButton.setButtonType(.momentaryPushIn)
         recordHotKeyButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
         self.recordHotKeyButton = recordHotKeyButton
+        recordHotKeyButton.setAccessibilityIdentifier("settings.record.shortcut")
         let recordHotKeyRow = makeRow([makeLabel("Record Toggle:"), recordHotKeyButton])
 
+        let variants = makeLabel("", wraps: true)
+        variants.setAccessibilityIdentifier("settings.record.shortcutVariants")
+        recordShortcutVariantsLabel = variants
+        let issue = makeLabel("", wraps: true)
+        issue.textColor = .systemOrange
+        issue.setAccessibilityIdentifier("settings.record.shortcutIssues")
+        hotkeyIssueLabel = issue
+        updateRecordingShortcutHelp()
+
         let systemAudioCheck = makeCheckbox("Capture system audio:", action: #selector(recordSystemAudioChanged(_:)), state: settings.recordSystemAudio)
+        systemAudioCheck.setAccessibilityIdentifier("settings.record.systemAudio")
 
         let micCheck = makeCheckbox("Capture audio input:", action: #selector(recordMicrophoneChanged(_:)), state: settings.recordMicrophone)
+        micCheck.setAccessibilityIdentifier("settings.record.microphone")
 
         let windNoiseCheck = makeCheckbox("Noise cancellation:", action: #selector(recordNoiseCancellationChanged(_:)), state: settings.recordNoiseCancellation)
+        windNoiseCheck.setAccessibilityIdentifier("settings.record.noiseCancellation")
         noiseCancellationCheckbox = windNoiseCheck
 
         let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -1460,6 +1361,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         micPopup.action = #selector(microphoneChanged(_:))
         micPopup.isEnabled = settings.recordMicrophone
         micPopup.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        micPopup.setAccessibilityIdentifier("settings.record.microphoneDevice")
         microphonePopup = micPopup
         let micDeviceRow = makeRow([makeLabel("Microphone:"), micPopup])
         let micOptions = makeIndentedColumn([windNoiseCheck, micDeviceRow])
@@ -1467,9 +1369,21 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
 
         let trimButton = NSButton(title: "Trim…", target: self, action: #selector(openTrimEditor(_:)))
         trimButton.bezelStyle = .rounded
+        trimButton.setAccessibilityIdentifier("settings.record.trim")
         let trimRow = makeRow([makeLabel("Edit existing video:"), trimButton])
 
-        return makeColumn([help, recordHotKeyRow, makeCheckboxColumn([systemAudioCheck, micCheck]), micOptions] + makeWebcamRows() + [trimRow], spacing: 10)
+        return makeColumn([help, recordHotKeyRow, variants, issue, makeCheckboxColumn([systemAudioCheck, micCheck]), micOptions] + makeWebcamRows() + [trimRow], spacing: 10)
+    }
+
+    private func updateRecordingShortcutHelp() {
+        let bindings = HotkeyBindings.all(settings: settings).filter { $0.group == .record }
+        recordShortcutVariantsLabel?.stringValue = bindings.map {
+            "\($0.actionName): \(Self.describe(keyCode: $0.keyCode, modifiers: NSEvent.ModifierFlags(rawValue: $0.modifiers)))"
+        }.joined(separator: " · ")
+        var issues = HotkeyBindings.registrationPlan(settings: settings).issues
+        for issue in HotkeyRegistrationDiagnostics.issues where !issues.contains(issue) { issues.append(issue) }
+        hotkeyIssueLabel?.stringValue = issues.joined(separator: "\n")
+        hotkeyIssueLabel?.isHidden = issues.isEmpty
     }
 
     // MARK: - Panorama tab
@@ -1579,6 +1493,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         heading.font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
 
         let enableCheck = makeCheckbox("", action: #selector(webcamEnabledChanged(_:)), state: settings.webcamEnabled)
+        enableCheck.setAccessibilityIdentifier("settings.record.webcamEnabled")
 
         let devicePopup = NSPopUpButton(frame: .zero, pullsDown: false)
         devicePopup.translatesAutoresizingMaskIntoConstraints = false
@@ -1591,6 +1506,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         devicePopup.selectItem(at: selectedDevice)
         devicePopup.target = self
         devicePopup.action = #selector(webcamDeviceChanged(_:))
+        devicePopup.setAccessibilityIdentifier("settings.record.webcamDevice")
         webcamDevicePopup = devicePopup
 
         let positionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -1610,6 +1526,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         }
         positionPopup.target = self
         positionPopup.action = #selector(webcamPositionChanged(_:))
+        positionPopup.setAccessibilityIdentifier("settings.record.webcamPosition")
         webcamPositionPopup = positionPopup
 
         let sizePopup = makeIndexedPopup(
@@ -1617,6 +1534,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             selected: settings.webcamSize,
             action: #selector(webcamSizeChanged(_:))
         )
+        sizePopup.setAccessibilityIdentifier("settings.record.webcamSize")
         webcamSizePopup = sizePopup
 
         let shapePopup = makeIndexedPopup(
@@ -1624,6 +1542,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
             selected: settings.webcamShape,
             action: #selector(webcamShapeChanged(_:))
         )
+        shapePopup.setAccessibilityIdentifier("settings.record.webcamShape")
         webcamShapePopup = shapePopup
 
         devicePopup.widthAnchor.constraint(equalToConstant: 185).isActive = true

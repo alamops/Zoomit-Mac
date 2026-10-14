@@ -99,7 +99,12 @@ private final class WebcamFrameOutput: NSObject, AVCaptureVideoDataOutputSampleB
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard sampleBuffer.isValid, let pixelBuffer = sampleBuffer.imageBuffer else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let image = ciContext.createCGImage(ciImage, from: ciImage.extent)
+        guard let rendered = ciContext.createCGImage(ciImage, from: ciImage.extent),
+              let context = CGContext(data: nil, width: rendered.width, height: rendered.height,
+                                      bitsPerComponent: 8, bytesPerRow: rendered.width * 4,
+                                      space: RecordingColorSpace.rgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        context.draw(rendered, in: CGRect(x: 0, y: 0, width: rendered.width, height: rendered.height))
+        let image = context.makeImage()
         lock.lock()
         latestImage = image
         lock.unlock()
@@ -244,6 +249,48 @@ final class WebcamOverlayController {
                 await settlePreview(window: window, contentView: contentView)
             }
         }
+    }
+
+    /// The presentation rect maps exactly onto the fixed recording canvas.
+    /// Dragging updates normalized output placement, independent of zoom/pan.
+    func startIsolated(settings: AppSettings, geometry: RecordingCanvasGeometry) async {
+        let fit = geometry.presentationContentRect
+        let area = CGRect(x: geometry.hostDisplayFrame.minX + fit.minX,
+                          y: geometry.hostDisplayFrame.maxY - fit.maxY,
+                          width: fit.width, height: fit.height)
+        await start(settings: settings, area: area)
+        window?.sharingType = .none
+        if settings.webcamEnabled, session == nil {
+            let alert = NSAlert()
+            alert.messageText = "Recording without webcam"
+            alert.informativeText = "The selected camera is unavailable or camera access was denied. The window or application recording will continue. Check camera access and the selected device in Settings."
+            alert.addButton(withTitle: "Continue")
+            alert.runModal()
+        }
+    }
+
+    func updateIsolatedPresentation(from old: RecordingCanvasGeometry, to new: RecordingCanvasGeometry) {
+        guard let recordingFrame else { return }
+        let normalized = old.normalizedOutputRect(forGlobalRect: recordingFrame)
+        let fit = new.presentationContentRect
+        let frame = CGRect(x: new.hostDisplayFrame.minX + fit.minX + normalized.minX * fit.width,
+                           y: new.hostDisplayFrame.maxY - fit.minY - normalized.maxY * fit.height,
+                           width: normalized.width * fit.width, height: normalized.height * fit.height)
+        recordingCornerRadius *= fit.width / old.presentationContentRect.width
+        self.recordingFrame = frame
+        window?.setFrame(frame, display: true)
+        if let view = window?.contentView, let layer = view.layer?.sublayers?.first {
+            layer.frame = view.bounds
+            layer.cornerRadius = recordingCornerRadius
+        }
+    }
+
+    func isolatedRecordingSnapshot(geometry: RecordingCanvasGeometry) -> RecordingWebcamSnapshot? {
+        guard let image = frameOutput?.latestFrame(), let recordingFrame else { return nil }
+        let fit = geometry.presentationContentRect
+        return RecordingWebcamSnapshot(image: image,
+            normalizedRect: geometry.normalizedOutputRect(forGlobalRect: recordingFrame),
+            cornerRadius: recordingCornerRadius * geometry.logicalSize.width / fit.width)
     }
 
     func stop() {

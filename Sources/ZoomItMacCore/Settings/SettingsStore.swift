@@ -36,6 +36,8 @@ struct AppSettings: Equatable {
     /// SnipOcrToggleKey behavior.
     var snipOcrHotKeyCode: Int
     var snipOcrHotKeyModifiers: UInt
+    /// Base recording shortcut: screen; XOR Shift = region, XOR Option = window,
+    /// XOR Shift+Option = application. No target identity is persisted.
     var recordHotKeyCode: Int
     var recordHotKeyModifiers: UInt
     /// Virtual key code and modifier-flag raw value for DemoType. A key code of

@@ -59,6 +59,8 @@ final class ModeCoordinator {
     )
     /// Notified when recording starts/stops so the UI (menu-bar icon) can react.
     var onRecordingStateChanged: ((Bool) -> Void)?
+    var onRecordingSessionStateChanged: ((RecordingSessionState) -> Void)?
+    var recordingSessionState: RecordingSessionState { recordingController.sessionState }
     /// Invoked when live zoom starts/stops so global Control+Up/Down zoom
     /// hotkeys can be registered only while live zoom is active.
     var onBeginLiveZoomNavigation: (() -> Void)?
@@ -82,9 +84,31 @@ final class ModeCoordinator {
         self.annotationController = annotationController
         self.viewportController = viewportController
         self.userSelectedResourceAccess = userSelectedResourceAccess
+        configureRecordingCallbacks()
+    }
+
+    /// Keep picker/editor/save transitions free of competing feature overlays,
+    /// while recording stop and exit commands retain their normal handling.
+    static func allowsCommand(_ command: AppCommand, during phase: RecordingSessionState.Phase) -> Bool {
+        switch phase {
+        case .selecting, .starting, .stopping, .editing, .saving:
+            switch command {
+            case .activateStaticZoom, .activateLiveZoom, .activateDrawWithoutZoom,
+                 .snipRegion, .snipOcr, .startPanorama, .zoomIn, .zoomOutOrExit,
+                 .toggleBreakTimer, .toggleDemoMirror:
+                return false
+            #if !ZOOMIT_APP_STORE
+            case .startDemoType, .resetDemoType:
+                return false
+            #endif
+            default: return true
+            }
+        default: return true
+        }
     }
 
     func handle(_ command: AppCommand) {
+        guard Self.allowsCommand(command, during: recordingSessionState.phase) else { return }
         if isSnipping {
             // Ignore activation and snip hotkeys while a region selection is on
             // screen so a second trigger can't stack overlays.
@@ -131,8 +155,10 @@ final class ModeCoordinator {
             startSnip(action: save ? .saveImage : .copyImage)
         case .snipOcr:
             startSnip(action: .recognizeText)
-        case .toggleRecording(let region):
-            toggleRecording(region: region)
+        case .toggleRecording(let scope):
+            toggleRecording(scope: scope)
+        case .stopRecording:
+            recordingController.stopIfRecording()
         case .startPanorama(let save):
             togglePanorama(save: save)
         #if !ZOOMIT_APP_STORE
@@ -191,6 +217,11 @@ final class ModeCoordinator {
             return
         }
 
+        if recordingController.isIsolatedRecording {
+            activateIsolatedOverlay(mode: .staticZoom, initialZoom: settingsStore.load().defaultZoomFactor)
+            return
+        }
+
         guard ScreenRecordingPrompt.ensureGranted(permissionService) else {
             return
         }
@@ -203,6 +234,7 @@ final class ModeCoordinator {
         Task { @MainActor in
             do {
                 let frame = try await captureDisplayForOverlay(display)
+                guard self.recordingSessionState.allowsDesktopOverlayCapture else { return }
                 let settings = settingsStore.load()
                 viewportController.configure(for: frame, initialZoom: settings.defaultZoomFactor)
                 annotationController.reset()
@@ -238,6 +270,11 @@ final class ModeCoordinator {
             return
         }
 
+        if recordingController.isIsolatedRecording {
+            activateIsolatedOverlay(mode: .liveZoom, initialZoom: settingsStore.load().defaultZoomFactor)
+            return
+        }
+
         guard ScreenRecordingPrompt.ensureGranted(permissionService) else {
             return
         }
@@ -252,6 +289,7 @@ final class ModeCoordinator {
                 // Capture one still frame for the initial display, then let the
                 // live stream keep refreshing the magnified content.
                 let frame = try await captureDisplayForOverlay(display)
+                guard self.recordingSessionState.allowsDesktopOverlayCapture else { return }
                 let settings = settingsStore.load()
                 viewportController.configure(for: frame, initialZoom: settings.defaultZoomFactor)
                 annotationController.reset()
@@ -313,6 +351,11 @@ final class ModeCoordinator {
             return
         }
 
+        if recordingController.isIsolatedRecording {
+            activateIsolatedOverlay(mode: .drawOnly, initialZoom: 1)
+            return
+        }
+
         guard ScreenRecordingPrompt.ensureGranted(permissionService) else {
             return
         }
@@ -325,6 +368,7 @@ final class ModeCoordinator {
         Task { @MainActor in
             do {
                 let frame = try await captureDisplayForOverlay(display)
+                guard self.recordingSessionState.allowsDesktopOverlayCapture else { return }
                 let settings = settingsStore.load()
                 // Draw-without-zoom freezes the screen at 1x and goes straight
                 // into drawing mode; there is no magnification or animation.
@@ -437,6 +481,13 @@ final class ModeCoordinator {
         }
         switch mode {
         case .idle:
+            if recordingController.isIsolatedRecording {
+                activateIsolatedOverlay(mode: .drawOnly, initialZoom: 1)
+                guard mode == .drawOnly else { return }
+                isSnipping = true
+                overlayController.beginRegionSnip(action: action) { [weak self] in self?.isSnipping = false }
+                return
+            }
             isSnipping = true
             snipController.begin(action: action) { [weak self] in
                 self?.isSnipping = false
@@ -460,19 +511,85 @@ final class ModeCoordinator {
     /// Starts/stops screen recording. Recording runs independently of the zoom
     /// overlay so the user can zoom and draw (and have those captured) while a
     /// recording is in progress.
-    private func toggleRecording(region: Bool) {
-        // Make sure the Save dialog (shown after stopping) isn't hidden behind a
-        // zoom overlay by dismissing any active overlay first.
+    private func configureRecordingCallbacks() {
         recordingController.overlayFrameProvider = { [weak self] sourceRect in
-            self?.overlayController.captureFrameForRecording(sourceRect: sourceRect)
+            guard let self, !self.recordingController.isIsolatedRecording else { return nil }
+            return self.overlayController.captureFrameForRecording(sourceRect: sourceRect)
         }
-        recordingController.onWillShowSaveDialog = { [weak self] in
+        recordingController.isolatedOverlaySnapshotProvider = { [weak self] in
+            self?.overlayController.recordingOverlaySnapshot()
+        }
+        recordingController.onIsolatedSourceChanged = { [weak self] source, geometry, generation in
+            self?.updateIsolatedOverlay(source: source, geometry: geometry, generation: generation)
+        }
+        recordingController.onSessionStateChanged = { [weak self] state in
+            self?.onRecordingSessionStateChanged?(state)
+        }
+        recordingController.onWillPresentRecordingResult = { [weak self] in
             self?.overlayController.prepareForPresentedWindow()
             self?.exitActiveMode()
         }
-        recordingController.toggle(region: region) { [weak self] recording in
+    }
+
+    private func toggleRecording(scope: RecordingScope) {
+        if scope.isIsolated && recordingSessionState.canStart {
+            exitActiveMode()
+            annotationController.reset()
+        }
+        recordingController.toggle(scope: scope) { [weak self] recording in
             self?.onRecordingStateChanged?(recording)
         }
+    }
+
+    /// The host display carries only the presentation. Every pixel in this
+    /// canvas originates in the authorized source or the explicit black base.
+    private func activateIsolatedOverlay(mode requestedMode: AppMode, initialZoom: CGFloat) {
+        guard recordingSessionState.isRecording,
+              let original = recordingController.isolatedGeometry,
+              let display = displayManager.activeDisplay(),
+              let geometry = try? RecordingCanvasGeometry(logicalSize: original.logicalSize,
+                                                          pixelScale: original.pixelScale,
+                                                          hostDisplayFrame: display.frame),
+              let image = RecordingFrameRenderer.normalizedSourceImage(source: recordingController.isolatedSourceFrame,
+                                                                         geometry: geometry,
+                                                                         generation: recordingController.isolatedGeneration) else { return }
+        let source = recordingController.isolatedSourceFrame
+        let available = source?.availability == .available && source?.image != nil
+        let footprint = RecordingFrameRenderer.logicalContentRect(source: source, geometry: geometry,
+                                                                   generation: recordingController.isolatedGeneration)
+        recordingController.updateIsolatedPresentationHost(frame: display.frame)
+        let frame = CapturedFrame(image: image, display: display,
+                                  pixelSize: CGSize(width: image.width, height: image.height), timestamp: Date())
+        let settings = settingsStore.load()
+        viewportController.configure(for: frame, initialZoom: initialZoom, contentGeometry: geometry)
+        annotationController.reset()
+        annotationController.currentStyle.rootWidth = settings.rootPenWidth
+        annotationController.typingFontName = settings.typingFontName
+        annotationController.typingFontSize = settings.typingFontSize
+        if settings.animateZoom && requestedMode != .drawOnly { viewportController.beginZoomInAnimation() }
+        overlayController.show(frame: frame, viewportController: viewportController,
+                               annotationController: annotationController, smoothImage: settings.smoothImage,
+                               excludeFromScreenCapture: true, contentGeometry: geometry,
+                               generation: recordingController.isolatedGeneration,
+                               activeContentRect: footprint, sourceAvailable: available,
+                               commandSink: { [weak self] in self?.handle($0) })
+        mode = requestedMode
+        overlayController.updateInteractionMode(requestedMode)
+        if requestedMode == .liveZoom { onBeginLiveZoomNavigation?() }
+        if settings.animateZoom && requestedMode != .drawOnly { overlayController.runZoomAnimation() }
+    }
+
+    private func updateIsolatedOverlay(source: RecordingSourceFrame?, geometry: RecordingCanvasGeometry?, generation: UInt64) {
+        guard mode != .idle, viewportController.contentGeometry != nil,
+              overlayController.visibleIsolatedCanvasGeneration == generation,
+              recordingController.isIsolatedRecording,
+              generation == recordingController.isolatedGeneration,
+              let geometry,
+              let image = RecordingFrameRenderer.normalizedSourceImage(source: source, geometry: geometry, generation: generation) else { return }
+        let available = source?.generation == generation && source?.availability == .available && source?.image != nil
+        let footprint = RecordingFrameRenderer.logicalContentRect(source: source, geometry: geometry, generation: generation)
+        overlayController.updateIsolatedSource(image: image, activeContentRect: footprint,
+                                              available: available, generation: generation)
     }
 
     /// Starts/stops panorama (scrolling) capture. Like recording, it runs

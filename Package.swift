@@ -1,5 +1,10 @@
 // swift-tools-version: 6.0
 import PackageDescription
+import Foundation
+
+// Bundled builds must report the same identity to native capture services as
+// their signed app bundle. Bare SwiftPM runs retain the standalone metadata.
+let embeddedInfoPlist = ProcessInfo.processInfo.environment["ZOOMIT_EMBEDDED_INFO_PLIST"] ?? "ZoomItInfo.plist"
 
 let package = Package(
     name: "ZoomItMac",
@@ -38,7 +43,7 @@ let package = Package(
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",
                     "-Xlinker", "__info_plist",
-                    "-Xlinker", "ZoomItInfo.plist"
+                    "-Xlinker", embeddedInfoPlist
                 ])
             ]
         ),

@@ -103,6 +103,56 @@ if (( ${#arch_flags} > 0 )) && ! xcodebuild -version >/dev/null 2>&1; then
     arch_flags=()
 fi
 
+# ScreenCaptureKit reads metadata embedded in the executable as well as the
+# signed bundle. Give both the same identity, including dev and test builds.
+# Keep the linker input in a per-build directory so metadata changes relink.
+mkdir -p "$ROOT_DIR/.build"
+APP_INFO_DIR="$(mktemp -d "$ROOT_DIR/.build/app-info.XXXXXX")"
+trap 'rm -rf "$APP_INFO_DIR"' EXIT
+EMBEDDED_INFO_PLIST="$APP_INFO_DIR/Info.plist"
+cat > "$EMBEDDED_INFO_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>$DISPLAY_NAME</string>
+    <key>CFBundleExecutable</key>
+    <string>ZoomIt</string>
+    <key>CFBundleIconFile</key>
+    <string>ZoomIt</string>
+    <key>CFBundleIdentifier</key>
+    <string>$BUNDLE_ID</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$DISPLAY_NAME</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$VERSION</string>
+    <key>CFBundleVersion</key>
+    <string>$BUILD_NUMBER</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>ZoomIt shows your webcam as a picture-in-picture overlay when you enable it for screen recordings.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>ZoomIt records your microphone when you enable microphone capture for screen recordings.</string>
+    <key>ZoomItDistribution</key>
+    <string>$DIST_DISTRIBUTION</string>
+</dict>
+</plist>
+PLIST
+
+plutil -lint -s "$EMBEDDED_INFO_PLIST"
+export ZOOMIT_EMBEDDED_INFO_PLIST="$EMBEDDED_INFO_PLIST"
 swift build -c "$CONFIGURATION" $arch_flags $distribution_swift_flags
 BIN_DIR="$(swift build -c "$CONFIGURATION" $arch_flags $distribution_swift_flags --show-bin-path)"
 
@@ -147,46 +197,7 @@ if [[ -f "$ICON_SOURCE" ]] && command -v sips >/dev/null && command -v iconutil 
     iconutil -c icns "$ICONSET" -o "$APP_PATH/Contents/Resources/ZoomIt.icns"
 fi
 
-cat > "$APP_PATH/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleDisplayName</key>
-    <string>$DISPLAY_NAME</string>
-    <key>CFBundleExecutable</key>
-    <string>ZoomIt</string>
-    <key>CFBundleIconFile</key>
-    <string>ZoomIt</string>
-    <key>CFBundleIdentifier</key>
-    <string>$BUNDLE_ID</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>$DISPLAY_NAME</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>$VERSION</string>
-    <key>CFBundleVersion</key>
-    <string>$BUILD_NUMBER</string>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.utilities</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSCameraUsageDescription</key>
-    <string>ZoomIt shows your webcam as a picture-in-picture overlay when you enable it for screen recordings.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>ZoomIt records your microphone when you enable microphone capture for screen recordings.</string>
-    <key>ZoomItDistribution</key>
-    <string>$DIST_DISTRIBUTION</string>
-</dict>
-</plist>
-PLIST
+cp "$EMBEDDED_INFO_PLIST" "$APP_PATH/Contents/Info.plist"
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
     # Ad-hoc sign the completed bundle so macOS privacy services see the real

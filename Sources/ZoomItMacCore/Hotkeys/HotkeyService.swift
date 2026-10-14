@@ -5,24 +5,8 @@ import Carbon.HIToolbox
 final class HotkeyService {
     private let settingsStore: SettingsStore
     private let commandHandler: (AppCommand) -> Void
-    private var hotKeyRef: EventHotKeyRef?
-    private var drawHotKeyRef: EventHotKeyRef?
-    private var liveHotKeyRef: EventHotKeyRef?
-    private var snipCopyHotKeyRef: EventHotKeyRef?
-    private var snipSaveHotKeyRef: EventHotKeyRef?
-    private var snipOcrHotKeyRef: EventHotKeyRef?
-    private var recordHotKeyRef: EventHotKeyRef?
-    private var recordRegionHotKeyRef: EventHotKeyRef?
-    #if !ZOOMIT_APP_STORE
-    private var demoTypeHotKeyRef: EventHotKeyRef?
-    private var demoTypeResetHotKeyRef: EventHotKeyRef?
-    #endif
-    private var panoramaCopyHotKeyRef: EventHotKeyRef?
-    private var panoramaSaveHotKeyRef: EventHotKeyRef?
-    private var demoMirrorScreenHotKeyRef: EventHotKeyRef?
-    private var demoMirrorRegionHotKeyRef: EventHotKeyRef?
-    private var demoMirrorWindowHotKeyRef: EventHotKeyRef?
-    private var breakHotKeyRef: EventHotKeyRef?
+    private var registeredRefs: [UInt32: EventHotKeyRef] = [:]
+    private(set) var registrationIssues: [String] = []
     private var zoomInNavRef: EventHotKeyRef?
     private var zoomOutNavRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
@@ -64,22 +48,19 @@ final class HotkeyService {
         let signature = fourCharacterCode("ZITM")
 
         endLiveZoomNavigation()
-        RegisterEventHotKey(
-            UInt32(kVK_UpArrow),
-            UInt32(optionKey),
-            EventHotKeyID(signature: signature, id: 4),
-            target,
-            0,
-            &zoomInNavRef
-        )
-        RegisterEventHotKey(
-            UInt32(kVK_DownArrow),
-            UInt32(optionKey),
-            EventHotKeyID(signature: signature, id: 5),
-            target,
-            0,
-            &zoomOutNavRef
-        )
+        guard eventHandlerRef != nil else { return }
+        registrationIssues.removeAll { $0.hasPrefix("Live Zoom In could not register") || $0.hasPrefix("Live Zoom Out could not register") }
+        let upStatus = RegisterEventHotKey(UInt32(kVK_UpArrow), UInt32(optionKey),
+                                           EventHotKeyID(signature: signature, id: 4), target, 0, &zoomInNavRef)
+        let downStatus = RegisterEventHotKey(UInt32(kVK_DownArrow), UInt32(optionKey),
+                                             EventHotKeyID(signature: signature, id: 5), target, 0, &zoomOutNavRef)
+        if upStatus != noErr || zoomInNavRef == nil {
+            registrationIssues.append("Live Zoom In could not register Option+Up (macOS error \(upStatus)). Check shortcut assignments in Settings.")
+        }
+        if downStatus != noErr || zoomOutNavRef == nil {
+            registrationIssues.append("Live Zoom Out could not register Option+Down (macOS error \(downStatus)). Check shortcut assignments in Settings.")
+        }
+        HotkeyRegistrationDiagnostics.issues = registrationIssues
     }
 
     func endLiveZoomNavigation() {
@@ -102,7 +83,7 @@ final class HotkeyService {
         )
         let selfPointer = Unmanaged.passUnretained(self).toOpaque()
 
-        InstallEventHandler(
+        let status = InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData in
                 guard let event, let userData else { return noErr }
@@ -128,8 +109,8 @@ final class HotkeyService {
                 case 5: command = .zoomOutOrExit
                 case 6: command = .snipRegion(save: false)
                 case 7: command = .snipRegion(save: true)
-                case 8: command = .toggleRecording(region: false)
-                case 9: command = .toggleRecording(region: true)
+                case 8: command = .toggleRecording(scope: .screen)
+                case 9: command = .toggleRecording(scope: .region)
                 case 10: command = .startPanorama(save: false)
                 case 11: command = .startPanorama(save: true)
                 case 12: command = .toggleBreakTimer
@@ -141,6 +122,8 @@ final class HotkeyService {
                 case 16: command = .toggleDemoMirror(scope: .screen)
                 case 17: command = .toggleDemoMirror(scope: .region)
                 case 18: command = .toggleDemoMirror(scope: .window)
+                case 19: command = .toggleRecording(scope: .window)
+                case 20: command = .toggleRecording(scope: .application)
                 default: return noErr
                 }
 
@@ -155,260 +138,40 @@ final class HotkeyService {
             selfPointer,
             &eventHandlerRef
         )
+        if status != noErr {
+            registrationIssues = ["Global shortcuts are unavailable (macOS event handler error \(status)). Restart ZoomIt or use the menu actions."]
+            HotkeyRegistrationDiagnostics.issues = registrationIssues
+        }
     }
 
     private func registerHotKey() {
         unregisterHotKey()
-
-        let settings = settingsStore.load()
+        let plan = HotkeyBindings.registrationPlan(settings: settingsStore.load())
+        registrationIssues = plan.issues
+        if eventHandlerRef == nil {
+            registrationIssues.append("Global shortcut handling is unavailable. Restart ZoomIt or use the menu actions.")
+            HotkeyRegistrationDiagnostics.issues = registrationIssues
+            return
+        }
         let target = GetApplicationEventTarget()
         let signature = fourCharacterCode("ZITM")
-
-        let zoomModifiers = NSEvent.ModifierFlags(rawValue: settings.hotKeyModifiers)
-        RegisterEventHotKey(
-            UInt32(settings.hotKeyCode),
-            carbonModifiers(from: zoomModifiers),
-            EventHotKeyID(signature: signature, id: 1),
-            target,
-            0,
-            &hotKeyRef
-        )
-
-        let drawModifiers = NSEvent.ModifierFlags(rawValue: settings.drawHotKeyModifiers)
-        RegisterEventHotKey(
-            UInt32(settings.drawHotKeyCode),
-            carbonModifiers(from: drawModifiers),
-            EventHotKeyID(signature: signature, id: 2),
-            target,
-            0,
-            &drawHotKeyRef
-        )
-
-        let liveModifiers = NSEvent.ModifierFlags(rawValue: settings.liveHotKeyModifiers)
-        RegisterEventHotKey(
-            UInt32(settings.liveHotKeyCode),
-            carbonModifiers(from: liveModifiers),
-            EventHotKeyID(signature: signature, id: 3),
-            target,
-            0,
-            &liveHotKeyRef
-        )
-
-        // Region snip: the base shortcut copies the region; the same shortcut
-        // with Shift toggled saves it to a file.
-        let snipModifiers = NSEvent.ModifierFlags(rawValue: settings.snipHotKeyModifiers)
-        RegisterEventHotKey(
-            UInt32(settings.snipHotKeyCode),
-            carbonModifiers(from: snipModifiers),
-            EventHotKeyID(signature: signature, id: 6),
-            target,
-            0,
-            &snipCopyHotKeyRef
-        )
-
-        let snipSaveModifiers = NSEvent.ModifierFlags(rawValue: settings.snipHotKeyModifiers ^ NSEvent.ModifierFlags.shift.rawValue)
-        RegisterEventHotKey(
-            UInt32(settings.snipHotKeyCode),
-            carbonModifiers(from: snipSaveModifiers),
-            EventHotKeyID(signature: signature, id: 7),
-            target,
-            0,
-            &snipSaveHotKeyRef
-        )
-
-        // OCR snip: recognizes text in the selected region and copies it to the
-        // clipboard. A key code of 0 disables the hotkey, matching ZoomIt.
-        if settings.snipOcrHotKeyCode != 0 {
-            let snipOcrModifiers = NSEvent.ModifierFlags(rawValue: settings.snipOcrHotKeyModifiers)
-            RegisterEventHotKey(
-                UInt32(settings.snipOcrHotKeyCode),
-                carbonModifiers(from: snipOcrModifiers),
-                EventHotKeyID(signature: signature, id: 13),
-                target,
-                0,
-                &snipOcrHotKeyRef
-            )
+        for binding in plan.bindings {
+            var reference: EventHotKeyRef?
+            let status = RegisterEventHotKey(UInt32(clamping: binding.keyCode),
+                                            carbonModifiers(from: NSEvent.ModifierFlags(rawValue: binding.modifiers)),
+                                            EventHotKeyID(signature: signature, id: binding.id), target, 0, &reference)
+            if status == noErr, let reference {
+                registeredRefs[binding.id] = reference
+            } else {
+                registrationIssues.append("\(binding.actionName) could not register its global shortcut (macOS error \(status)). Choose another shortcut in Settings; its menu action remains available.")
+            }
         }
-
-        // Recording: the base shortcut records the whole screen; the same
-        // shortcut with Shift toggled records a selected region.
-        let recordModifiers = NSEvent.ModifierFlags(rawValue: settings.recordHotKeyModifiers)
-        RegisterEventHotKey(
-            UInt32(settings.recordHotKeyCode),
-            carbonModifiers(from: recordModifiers),
-            EventHotKeyID(signature: signature, id: 8),
-            target,
-            0,
-            &recordHotKeyRef
-        )
-
-        let recordRegionModifiers = NSEvent.ModifierFlags(rawValue: settings.recordHotKeyModifiers ^ NSEvent.ModifierFlags.shift.rawValue)
-        RegisterEventHotKey(
-            UInt32(settings.recordHotKeyCode),
-            carbonModifiers(from: recordRegionModifiers),
-            EventHotKeyID(signature: signature, id: 9),
-            target,
-            0,
-            &recordRegionHotKeyRef
-        )
-
-        #if !ZOOMIT_APP_STORE
-        if settings.demoTypeHotKeyCode != 0 {
-            let demoTypeModifiers = NSEvent.ModifierFlags(rawValue: settings.demoTypeHotKeyModifiers)
-            RegisterEventHotKey(
-                UInt32(settings.demoTypeHotKeyCode),
-                carbonModifiers(from: demoTypeModifiers),
-                EventHotKeyID(signature: signature, id: 14),
-                target,
-                0,
-                &demoTypeHotKeyRef
-            )
-
-            let demoTypeResetModifiers = NSEvent.ModifierFlags(rawValue: settings.demoTypeHotKeyModifiers ^ NSEvent.ModifierFlags.shift.rawValue)
-            RegisterEventHotKey(
-                UInt32(settings.demoTypeHotKeyCode),
-                carbonModifiers(from: demoTypeResetModifiers),
-                EventHotKeyID(signature: signature, id: 15),
-                target,
-                0,
-                &demoTypeResetHotKeyRef
-            )
-        }
-        #endif
-
-        // Panorama: the base shortcut copies the stitched panorama to the
-        // clipboard; the same shortcut with Shift toggled saves it to a file.
-        let panoramaModifiers = NSEvent.ModifierFlags(rawValue: settings.panoramaHotKeyModifiers)
-        RegisterEventHotKey(
-            UInt32(settings.panoramaHotKeyCode),
-            carbonModifiers(from: panoramaModifiers),
-            EventHotKeyID(signature: signature, id: 10),
-            target,
-            0,
-            &panoramaCopyHotKeyRef
-        )
-
-        let panoramaSaveModifiers = NSEvent.ModifierFlags(rawValue: settings.panoramaHotKeyModifiers ^ NSEvent.ModifierFlags.shift.rawValue)
-        RegisterEventHotKey(
-            UInt32(settings.panoramaHotKeyCode),
-            carbonModifiers(from: panoramaSaveModifiers),
-            EventHotKeyID(signature: signature, id: 11),
-            target,
-            0,
-            &panoramaSaveHotKeyRef
-        )
-
-        let breakModifiers = NSEvent.ModifierFlags(rawValue: settings.breakHotKeyModifiers)
-        RegisterEventHotKey(
-            UInt32(settings.breakHotKeyCode),
-            carbonModifiers(from: breakModifiers),
-            EventHotKeyID(signature: signature, id: 12),
-            target,
-            0,
-            &breakHotKeyRef
-        )
-
-        // DemoMirror: the base shortcut mirrors the whole screen; the same
-        // shortcut with Shift toggled selects a region to mirror; with Option
-        // toggled it mirrors the window under the cursor.
-        let demoMirrorModifiers = NSEvent.ModifierFlags(rawValue: settings.demoMirrorHotKeyModifiers)
-        RegisterEventHotKey(
-            UInt32(settings.demoMirrorHotKeyCode),
-            carbonModifiers(from: demoMirrorModifiers),
-            EventHotKeyID(signature: signature, id: 16),
-            target,
-            0,
-            &demoMirrorScreenHotKeyRef
-        )
-
-        let demoMirrorRegionModifiers = NSEvent.ModifierFlags(rawValue: settings.demoMirrorHotKeyModifiers ^ NSEvent.ModifierFlags.shift.rawValue)
-        RegisterEventHotKey(
-            UInt32(settings.demoMirrorHotKeyCode),
-            carbonModifiers(from: demoMirrorRegionModifiers),
-            EventHotKeyID(signature: signature, id: 17),
-            target,
-            0,
-            &demoMirrorRegionHotKeyRef
-        )
-
-        let demoMirrorWindowModifiers = NSEvent.ModifierFlags(rawValue: settings.demoMirrorHotKeyModifiers ^ NSEvent.ModifierFlags.option.rawValue)
-        RegisterEventHotKey(
-            UInt32(settings.demoMirrorHotKeyCode),
-            carbonModifiers(from: demoMirrorWindowModifiers),
-            EventHotKeyID(signature: signature, id: 18),
-            target,
-            0,
-            &demoMirrorWindowHotKeyRef
-        )
+        HotkeyRegistrationDiagnostics.issues = registrationIssues
     }
 
     private func unregisterHotKey() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-        }
-        hotKeyRef = nil
-        if let drawHotKeyRef {
-            UnregisterEventHotKey(drawHotKeyRef)
-        }
-        drawHotKeyRef = nil
-        if let liveHotKeyRef {
-            UnregisterEventHotKey(liveHotKeyRef)
-        }
-        liveHotKeyRef = nil
-        if let snipCopyHotKeyRef {
-            UnregisterEventHotKey(snipCopyHotKeyRef)
-        }
-        snipCopyHotKeyRef = nil
-        if let snipSaveHotKeyRef {
-            UnregisterEventHotKey(snipSaveHotKeyRef)
-        }
-        snipSaveHotKeyRef = nil
-        if let snipOcrHotKeyRef {
-            UnregisterEventHotKey(snipOcrHotKeyRef)
-        }
-        snipOcrHotKeyRef = nil
-        if let recordHotKeyRef {
-            UnregisterEventHotKey(recordHotKeyRef)
-        }
-        recordHotKeyRef = nil
-        if let recordRegionHotKeyRef {
-            UnregisterEventHotKey(recordRegionHotKeyRef)
-        }
-        recordRegionHotKeyRef = nil
-        #if !ZOOMIT_APP_STORE
-        if let demoTypeHotKeyRef {
-            UnregisterEventHotKey(demoTypeHotKeyRef)
-        }
-        demoTypeHotKeyRef = nil
-        if let demoTypeResetHotKeyRef {
-            UnregisterEventHotKey(demoTypeResetHotKeyRef)
-        }
-        demoTypeResetHotKeyRef = nil
-        #endif
-        if let panoramaCopyHotKeyRef {
-            UnregisterEventHotKey(panoramaCopyHotKeyRef)
-        }
-        panoramaCopyHotKeyRef = nil
-        if let panoramaSaveHotKeyRef {
-            UnregisterEventHotKey(panoramaSaveHotKeyRef)
-        }
-        panoramaSaveHotKeyRef = nil
-        if let demoMirrorScreenHotKeyRef {
-            UnregisterEventHotKey(demoMirrorScreenHotKeyRef)
-        }
-        demoMirrorScreenHotKeyRef = nil
-        if let demoMirrorRegionHotKeyRef {
-            UnregisterEventHotKey(demoMirrorRegionHotKeyRef)
-        }
-        demoMirrorRegionHotKeyRef = nil
-        if let demoMirrorWindowHotKeyRef {
-            UnregisterEventHotKey(demoMirrorWindowHotKeyRef)
-        }
-        demoMirrorWindowHotKeyRef = nil
-        if let breakHotKeyRef {
-            UnregisterEventHotKey(breakHotKeyRef)
-        }
-        breakHotKeyRef = nil
+        for reference in registeredRefs.values { UnregisterEventHotKey(reference) }
+        registeredRefs.removeAll()
     }
 
     private func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {

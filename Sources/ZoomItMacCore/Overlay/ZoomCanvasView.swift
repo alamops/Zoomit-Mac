@@ -3,6 +3,12 @@ import AppKit
 @MainActor
 final class ZoomCanvasView: NSView {
     private var capturedFrame: CapturedFrame
+    private let contentGeometry: RecordingCanvasGeometry?
+    private let recordingGeneration: UInt64
+    private var activeContentRect: CGRect?
+    private var sourceAvailable: Bool
+    private var isolatedUsesLiveSource = false
+    private var lastStrokePoint: CGPoint?
     private let viewportController: ZoomViewportController
     private let annotationController: AnnotationController
     private let userSelectedResourceAccess: UserSelectedResourceAccess
@@ -48,6 +54,11 @@ final class ZoomCanvasView: NSView {
 
     var interactionMode: AppMode = .staticZoom {
         didSet {
+            switch interactionMode {
+            case .liveZoom: isolatedUsesLiveSource = true
+            case .staticZoom, .drawOnly: isolatedUsesLiveSource = false
+            default: break
+            }
             let leftTypingMode = oldValue == .typing && interactionMode != .typing
             if leftTypingMode {
                 anchorCursorAfterTyping()
@@ -65,8 +76,9 @@ final class ZoomCanvasView: NSView {
                     pointerViewPoint = convert(windowPoint, from: nil)
                 }
                 // Place the caret at the current cursor position, like ZoomIt.
-                let insertion = contentPoint(forViewPoint: pointerViewPoint)
-                annotationController.setInsertionPoint(insertion)
+                if let insertion = checkedContentPoint(forViewPoint: pointerViewPoint) {
+                    annotationController.setInsertionPoint(insertion)
+                }
             case .drawOnly:
                 // Draw-without-zoom starts already in drawing mode so the first
                 // click begins a stroke immediately. Returning from typing also
@@ -87,10 +99,18 @@ final class ZoomCanvasView: NSView {
         viewportController: ZoomViewportController,
         annotationController: AnnotationController,
         smoothImage: Bool,
+        contentGeometry: RecordingCanvasGeometry? = nil,
+        generation: UInt64 = 0,
+        activeContentRect: CGRect? = nil,
+        sourceAvailable: Bool = true,
         userSelectedResourceAccess: UserSelectedResourceAccess,
         commandSink: @escaping (AppCommand) -> Void
     ) {
         self.capturedFrame = capturedFrame
+        self.contentGeometry = contentGeometry
+        self.recordingGeneration = generation
+        self.activeContentRect = activeContentRect
+        self.sourceAvailable = sourceAvailable
         self.viewportController = viewportController
         self.annotationController = annotationController
         self.smoothImage = smoothImage
@@ -116,6 +136,53 @@ final class ZoomCanvasView: NSView {
         needsDisplay = true
     }
 
+    /// Invalidate frozen source and all annotation state on loss. A restored
+    /// static canvas freezes the first newly authorized frame, never old pixels.
+    func updateIsolatedSource(image: CGImage, activeContentRect: CGRect?, available: Bool, generation: UInt64) {
+        guard contentGeometry != nil, generation == recordingGeneration else { return }
+        if !available {
+            annotationController.clear()
+            blankScreen = nil
+            isStroking = false
+            activeStrokeTool = nil
+            lastStrokePoint = nil
+            if isSelectingRegion { cancelRegionSnip() }
+        }
+        if !available || !sourceAvailable || isolatedUsesLiveSource {
+            capturedFrame.image = image
+            self.activeContentRect = activeContentRect
+        }
+        sourceAvailable = available
+        if available && interactionMode == .typing && !annotationController.isTypingLocked,
+           let insertion = checkedContentPoint(forViewPoint: pointerViewPoint) {
+            annotationController.setInsertionPoint(insertion)
+        }
+        needsDisplay = true
+    }
+
+    /// Remains bound while unavailable so black-frame updates can clear a
+    /// frozen canvas even when no render snapshot is exported.
+    var isolatedCanvasGeneration: UInt64? { contentGeometry == nil ? nil : recordingGeneration }
+
+    func recordingOverlaySnapshot() -> RecordingOverlaySnapshot? {
+        guard contentGeometry != nil, sourceAvailable else { return nil }
+        let viewport = viewportController.sourceRect(for: bounds, cursorLocation: latestCursorLocation)
+        let caret = interactionMode == .typing ? annotationController.typingCaret().flatMap { caret -> RecordingCaretSnapshot? in
+            guard activeContentRect?.contains(caret.origin) ?? true else { return nil }
+            return RecordingCaretSnapshot(origin: caret.origin, height: caret.height, color: annotationController.currentStyle.color)
+        } : nil
+        let cursor = isDrawingMode && !isDrawingShapeStroke ? checkedContentPoint(forViewPoint: pointerViewPoint).map {
+            RecordingCursorSnapshot(point: $0, rootWidth: annotationController.currentStyle.rootWidth,
+                                    color: annotationController.currentStyle.color)
+        } : nil
+        let sketch: RecordingSketchPad? = blankScreen.map { $0 == .white ? .white : .black }
+        return RecordingOverlaySnapshot(generation: recordingGeneration, viewport: viewport,
+                                        frozenImage: isolatedUsesLiveSource ? nil : capturedFrame.image,
+                                        annotations: annotationController.annotationSnapshot,
+                                        inProgress: annotationController.inProgressSnapshot, caret: caret,
+                                        cursor: cursor, sketchPad: sketch, activeContentRect: activeContentRect)
+    }
+
     /// Toggles drawing mode from outside (e.g. the draw hotkey while live
     /// zoomed): it arms drawing if idle, or leaves drawing mode if already on,
     /// without changing magnification.
@@ -138,6 +205,13 @@ final class ZoomCanvasView: NSView {
         context.interpolationQuality = smoothImage ? .high : .none
 
         let source = viewportController.sourceRect(for: bounds, cursorLocation: latestCursorLocation)
+
+        if let geometry = contentGeometry {
+            ZoomCanvasRenderer.draw(image: capturedFrame.image, logicalBounds: geometry.logicalBounds,
+                                    destinationBounds: bounds, overlay: recordingOverlaySnapshot(), in: context)
+            if isSelectingRegion { drawRegionSelection(in: context) }
+            return
+        }
 
         if let blankScreen {
             // Sketch-pad mode: replace the captured screen with a solid color.
@@ -199,8 +273,9 @@ final class ZoomCanvasView: NSView {
             // The caret follows the mouse until the first character is typed,
             // then locks in place, matching ZoomIt.
             if !annotationController.isTypingLocked {
-                let insertion = contentPoint(forViewPoint: pointerViewPoint)
-                annotationController.setInsertionPoint(insertion)
+                if let insertion = checkedContentPoint(forViewPoint: pointerViewPoint) {
+                    annotationController.setInsertionPoint(insertion)
+                }
             }
         } else if !isDrawingMode {
             updateLatestCursorLocationFromMouse()
@@ -218,6 +293,8 @@ final class ZoomCanvasView: NSView {
             return
         }
         pointerViewPoint = convert(event.locationInWindow, from: nil)
+
+        guard checkedContentPoint(forViewPoint: pointerViewPoint) != nil else { return }
 
         if isSelectingRegion {
             regionAnchor = pointerViewPoint
@@ -254,6 +331,7 @@ final class ZoomCanvasView: NSView {
         let point = contentPoint(for: event)
         annotationController.setInsertionPoint(point)
         annotationController.begin(at: point, tool: tool)
+        lastStrokePoint = point
         isStroking = true
         activeStrokeTool = tool
         needsDisplay = true
@@ -267,7 +345,10 @@ final class ZoomCanvasView: NSView {
             return
         }
         if isDrawingMode && isStroking {
-            annotationController.update(at: contentPoint(for: event))
+            if let point = checkedContentPoint(forViewPoint: pointerViewPoint) {
+                annotationController.update(at: point)
+                lastStrokePoint = point
+            }
         }
         needsDisplay = true
     }
@@ -283,7 +364,10 @@ final class ZoomCanvasView: NSView {
             return
         }
         if isDrawingMode && isStroking {
-            annotationController.end(at: contentPoint(for: event))
+            if let point = checkedContentPoint(forViewPoint: pointerViewPoint) ?? lastStrokePoint {
+                annotationController.end(at: point)
+            }
+            lastStrokePoint = nil
             isStroking = false
             activeStrokeTool = nil
         }
@@ -384,6 +468,10 @@ final class ZoomCanvasView: NSView {
             }
             return
         }
+        if contentGeometry != nil && !sourceAvailable {
+            let exportKey = event.modifierFlags.contains(.command) && [UInt16(1), 8].contains(event.keyCode)
+            guard event.keyCode == 53 || exportKey else { return }
+        }
         switch event.keyCode {
         case 53:
             // Esc leaves typing mode first (matching ZoomIt). In live-zoom
@@ -431,10 +519,12 @@ final class ZoomCanvasView: NSView {
             // Return / Enter starts a new line. The caret drops to the next line
             // left-aligned with the start of the text (right edge for
             // right-aligned typing), matching standard multi-line text entry.
+            guard contentGeometry == nil || annotationController.isTypingLocked || checkedContentPoint(forViewPoint: pointerViewPoint) != nil else { return }
             annotationController.insertText("\n")
             needsDisplay = true
         default:
             if interactionMode == .typing, let characters = event.characters, !characters.isEmpty {
+                guard contentGeometry == nil || annotationController.isTypingLocked || checkedContentPoint(forViewPoint: pointerViewPoint) != nil else { return }
                 annotationController.insertText(characters)
                 needsDisplay = true
             } else {
@@ -517,6 +607,14 @@ final class ZoomCanvasView: NSView {
         context.strokePath()
     }
 
+    private func checkedContentPoint(forViewPoint point: CGPoint) -> CGPoint? {
+        guard let geometry = contentGeometry else { return contentPoint(forViewPoint: point) }
+        guard sourceAvailable else { return nil }
+        return geometry.contentPoint(forViewPoint: point, viewBounds: bounds,
+                                     viewport: viewportController.sourceRect(for: bounds, cursorLocation: latestCursorLocation),
+                                     activeContentRect: activeContentRect)
+    }
+
     private func contentPoint(for event: NSEvent) -> CGPoint {
         let viewPoint = convert(event.locationInWindow, from: nil)
         return contentPoint(forViewPoint: viewPoint)
@@ -582,7 +680,10 @@ final class ZoomCanvasView: NSView {
     private func leaveDrawingModeFromRightClick() {
         guard isDrawingMode else { return }
         if isStroking {
-            annotationController.end(at: contentPoint(forViewPoint: pointerViewPoint))
+            if let point = checkedContentPoint(forViewPoint: pointerViewPoint) ?? lastStrokePoint {
+                annotationController.end(at: point)
+            }
+            lastStrokePoint = nil
         }
         exitDrawingMode()
         needsDisplay = true
@@ -681,7 +782,10 @@ final class ZoomCanvasView: NSView {
     }
 
     private func viewPoint(forContentPoint point: CGPoint, source: CGRect) -> CGPoint {
-        CGPoint(
+        if let geometry = contentGeometry {
+            return geometry.viewPoint(forContentPoint: point, viewBounds: bounds, viewport: source)
+        }
+        return CGPoint(
             x: ((point.x - source.minX) / source.width) * bounds.width,
             y: ((point.y - source.minY) / source.height) * bounds.height
         )
@@ -726,29 +830,32 @@ final class ZoomCanvasView: NSView {
         }
     }
 
-    /// Live zoom is interactive (click-through, real cursor visible) whenever it
-    /// is not in drawing mode, letting the user keep using the system while the
-    /// magnified view follows the cursor. Drawing mode (and every other mode)
-    /// captures input modally as usual.
+    /// Display live zoom can pass clicks through because its coordinates remain
+    /// anchored to the desktop. Isolated content is fitted into a different
+    /// presentation rectangle, so it always captures input modally. Its live
+    /// imagery, mouse panning and keyboard zoom controls remain available.
     private var isInteractiveLiveZoom: Bool {
-        interactionMode == .liveZoom && !isDrawingMode && !isSelectingRegion
+        contentGeometry == nil && interactionMode == .liveZoom && !isDrawingMode && !isSelectingRegion
     }
 
     private func updateLiveZoomInteractivity() {
         guard let window else { return }
         let interactive = isInteractiveLiveZoom
+        window.ignoresMouseEvents = interactive
+        // A region snip temporarily shows the cursor even in a modal canvas.
+        // Restore its normal visibility when the snip ends without relying on
+        // a click-through transition (isolated live mode never has one).
+        if !interactive && !isSelectingRegion { hideSystemCursor() }
         guard interactive != liveZoomClickThrough else { return }
         liveZoomClickThrough = interactive
         if interactive {
             // Pass mouse events through to the apps underneath and show the real
             // cursor; a global monitor keeps the magnified view tracking it.
-            window.ignoresMouseEvents = true
             showSystemCursor()
             startLiveMouseTracking()
         } else {
             // Reclaim input so the overlay can draw/pan modally.
             stopLiveMouseTracking()
-            window.ignoresMouseEvents = false
             hideSystemCursor()
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
@@ -867,6 +974,7 @@ final class ZoomCanvasView: NSView {
     }
 
     private func updateRegionRect(to point: CGPoint) {
+        guard checkedContentPoint(forViewPoint: point) != nil else { return }
         guard let anchor = regionAnchor else { return }
         regionRect = CGRect(
             x: min(anchor.x, point.x),
