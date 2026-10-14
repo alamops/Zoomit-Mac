@@ -53,6 +53,11 @@ enum ZoomCanvasRenderer {
         context.restoreGState()
         if let cursor = overlay?.cursor, source.contains(cursor.point),
            overlay?.activeContentRect?.contains(cursor.point) != false {
+            // The cursor is painted in destination coordinates; its full shape
+            // must stay within the transformed target, including near edges.
+            if let footprint = overlay?.activeContentRect {
+                context.clip(to: footprint.intersection(source).applying(transform))
+            }
             let center = cursor.point.applying(transform)
             let radius = max(4, cursor.rootWidth * transform.a / 2)
             context.setFillColor(cursor.color.nsColor.cgColor)

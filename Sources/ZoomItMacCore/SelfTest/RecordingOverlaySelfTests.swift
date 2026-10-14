@@ -5,6 +5,7 @@ import AppKit
 enum RecordingOverlaySelfTests {
     static func run() throws {
         try nativeFootprintAndClipping()
+        try cursorEdgeClipping()
         try isolatedLiveInputIsModal()
         let geometry = try RecordingCanvasGeometry(logicalSize: CGSize(width: 64, height: 32), pixelScale: 2,
                                                    hostDisplayFrame: CGRect(x: -1000, y: 200, width: 600, height: 600))
@@ -154,6 +155,61 @@ enum RecordingOverlaySelfTests {
                     "empty native content cannot keep a frozen target alive")
         try require(RecordingFrameRenderer.logicalContentRect(source: frame, geometry: geometry, generation: 2) == nil,
                     "old-session footprint cannot affect a new target")
+    }
+
+    private static func cursorEdgeClipping() throws {
+        let logical = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let footprint = CGRect(x: 20, y: 20, width: 24, height: 24)
+        let zoomed = CGRect(x: 8, y: 8, width: 48, height: 48)
+        let preview = CGRect(x: 16, y: 8, width: 128, height: 96)
+        // Expected pixel footprints are independent of the renderer's transform:
+        // fixed video coordinates and an offset, aspect-fitted preview, both panned and unzoomed.
+        let cases: [(CGRect, CGRect, CGRect)] = [
+            (logical, logical, footprint),
+            (logical, zoomed, CGRect(x: 16, y: 16, width: 32, height: 32)),
+            (preview, logical, CGRect(x: 62, y: 38, width: 36, height: 36)),
+            (preview, zoomed, CGRect(x: 56, y: 32, width: 48, height: 48))
+        ]
+        for (destination, viewport, expectedFootprint) in cases {
+            for rootWidth: CGFloat in [1, 20] {
+                for point in [CGPoint(x: 21, y: 32), CGPoint(x: 43, y: 32),
+                              CGPoint(x: 32, y: 21), CGPoint(x: 32, y: 43)] {
+                    let width = Int(destination.maxX + destination.minX)
+                    let height = Int(destination.maxY + destination.minY)
+                    guard let context = CGContext(data: nil, width: width, height: height,
+                        bitsPerComponent: 8, bytesPerRow: width * 4, space: RecordingColorSpace.rgb,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                        throw SelfTestError.failure("Cursor edge bitmap allocation failed")
+                    }
+                    context.translateBy(x: 0, y: CGFloat(height))
+                    context.scaleBy(x: 1, y: -1)
+                    context.setFillColor(NSColor.black.cgColor)
+                    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+                    let overlay = RecordingOverlaySnapshot(generation: 1, viewport: viewport,
+                        cursor: RecordingCursorSnapshot(point: point, rootWidth: rootWidth, color: .red),
+                        activeContentRect: footprint)
+                    ZoomCanvasRenderer.draw(image: nil, logicalBounds: logical, destinationBounds: destination,
+                                            overlay: overlay, in: context)
+                    guard let image = context.makeImage(), let data = image.dataProvider?.data,
+                          let bytes = CFDataGetBytePtr(data) else {
+                        throw SelfTestError.failure("Cursor edge bitmap pixels unavailable")
+                    }
+                    var visibleCursor = false
+                    for y in 0..<height {
+                        for x in 0..<width {
+                            let index = y * image.bytesPerRow + x * 4
+                            let colored = bytes[index] != 0 || bytes[index + 1] != 0 || bytes[index + 2] != 0
+                            if expectedFootprint.contains(CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)) {
+                                visibleCursor = visibleCursor || colored
+                            } else {
+                                try require(!colored, "cursor near target edge \(point) must leave padding black at (\(x), \(y))")
+                            }
+                        }
+                    }
+                    try require(visibleCursor, "clipping must preserve the visible cursor inside the target")
+                }
+            }
+        }
     }
 
     private static func isolatedLiveInputIsModal() throws {
